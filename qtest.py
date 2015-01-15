@@ -1,7 +1,5 @@
 from pyrocko.gf import *
 
-# Eine station aus dem webnet
-# KVC
 t = Target(lat=50.2059,
            lon=12.5152,
            elevation=580,
