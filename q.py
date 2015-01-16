@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 
+
 class DCSourceWid(DCSource):
     store_id = String.T(optional=True, default=None)
     def __init__(self, **kwargs):
@@ -28,6 +29,9 @@ class DDContainer():
         for key1, key2_value in self.content.iteritems():
             for key2, value in key2_value.iteritems():
                 yield key1, key2, value
+
+    def __getitem__(self, keys):
+        return self.content[keys[0]][keys[1]]
 
     def add(self, key1, key2, value):
         self.content[key1][key2] = value
@@ -76,7 +80,6 @@ class Spectra(DDContainer):
 
         ax.set_yscale("log")
         ax.legend()
-        plt.show()
 
     def linregress(self, fmin=-999, fmax=999):
         regressions = defaultdict(dict)
@@ -106,27 +109,31 @@ class SyntheticCouple():
         self.target = target
         self.engine = engine
         self.spectra = Spectra()
+        self.phase_table = None
 
     def process(self, chopper):
-
-        chopper.prepare(self.master_slave)
+        responses = []
+        #chopper.prepare(self.master_slave)
         for i,s in enumerate(self.master_slave):
             self.target.store_id = s.store_id
-            chopper.update(self.engine.get_store(s.store_id))
             response = e.process(sources=[s], targets=self.target)
-            tr = response.pyrocko_traces()
-            assert len(tr)==1
-            tr = tr[0]
-            chopper.chop(s, self.target, tr)
-            self.spectra.add(s, self.target,
-                    tr.spectrum(tfade=chopper.get_tfade()))
+            store = self.engine.get_store(s.store_id)
+            chopper.update(store, s, self.target)
+            responses.append(response)
         
+        chopper.chop(responses)
+        for s, t, tr in chopper.iter_results():
+            self.spectra.add(s, t, tr.spectrum(tfade=chopper.get_tfade()))
+        
+        self.phase_table = chopper.table
+
     def plot(self):
         self.spectra.plot_all()
         
     def q(self, phasestr):
         # following eqn:
         # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
+
         sources, targets, fxfy = self.spectra.as_lists()
         dists = num.zeros(len(sources))
         arrivals = num.zeros(len(sources))
@@ -137,30 +144,14 @@ class SyntheticCouple():
             arrivals[i] = self.engine.get_store(sources[i].store_id).t(phasestr,
                                                 (sources[i].depth, dists[i]))
             freqs.append(fxfy[i][0])
-            A.append(fxfy[i][1])
-        print freqs
-        t2, t1 = arrivals[::-1]
-        q = num.pi*fx*(t2-t1)
-        #/(num.log(num.abs(specs[0]))+num.log(dists[0]-num.log(num.abs(specs[1]))-num.log(dists[1])))
-
-
-class Holder():
-    def __init__(self, func):
-        self.func = func
-        self.items = []
-
-    def add(self, item):
-        self.items.append(item)
-
-    def go(self):
-        for i in items:
-            if caller:
-                result = caller.func(**kwargs)
-            else:
-                result = func(**kwargs)
-
-            yield 
-
+            A.append(num.abs(fxfy[i][1]))
+        t1, t2 = arrivals[::-1]
+        assert all(fxfy[0][0]==fxfy[1][0])
+        q = num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
+        plt.plot(q)
+        plt.show()
+        print "asdfsadfasdf"
+        print q
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None, fade_factor=0., default_store=None):
@@ -169,26 +160,61 @@ class Chopper():
         self.fade_factor = fade_factor
         self.fixed_length = fixed_length
         self.current_store = default_store
-
+        self.table = DDContainer()
         self.tfade = 0.
+        self.chopped = DDContainer()
 
-    def chop(self, source, target, tr):
+    def chop(self, responses):
+        sources = []
+        targets = [] 
+        traces = []
 
-        dist = source.distance_to(target)
-        tstart = self.current_store.t(self.startphasestr, (source.depth, dist))
-        if self.endphasestr!=None and self.fixed_length==None:
-            tend = self.current_store.t(self.endphasestr, (source.depth, dist))
-        elif self.endphasestr==None and self.fixed_length!=None:
-            tend = self.fixed_length+tstart
-        else:
-            raise Exception('Need to define exactly one of endphasestr and fixed length')
-        self.tfade = (tend-tstart)*self.fade_factor
-        tr.chop(source.time+tstart-self.tfade, source.time+tstart+tend+self.tfade)
-        tr.run_chain()
-        return tr
+        for response in responses:
+            for so,ta,tr in response.iter_results():
+                sources.append(so)
+                targets.append(ta)
+                traces.append(tr)
+
+        deltat = max(traces, key=lambda x: x.deltat).deltat
+        trange = self.set_trange()
+        returntraces = []
+        for i in range(len(sources)):
+            s = sources[i]
+            t = targets[i]
+            tr = traces[i]
+            dist = s.distance_to(t)
+            depth = s.depth
+            tstart, end = self.table[s.store_id, (depth, dist)]
+            if self.endphasestr!=None and self.fixed_length==None:
+                tend = tend
+            elif self.endphasestr==None and self.fixed_length!=None:
+                tend = self.fixed_length+tstart
+            else:
+                raise Exception('Need to define exactly one of endphasestr and fixed length')
+            self.tfade = (tend-tstart)*self.fade_factor
+            tr.chop(tstart, tend)
+            tr.downsample_to(deltat)
+            returntraces.append(tr)
+            self.chopped.add(s,t,tr)
         
-    def update(self, store):
-        self.current_store = store
+    def iter_results(self):
+        return self.chopped.iterdd()
+
+    def update(self, store, source, target):
+        depth = source.depth
+        dist = source.distance_to(target)
+        tstart = store.t(self.startphasestr, (depth, dist))
+        tend = store.t(self.endphasestr, (depth, dist))
+        self.table.add(store.config.id, (depth, dist), (tstart, tend))
+
+    def set_trange(self):
+        _,_, times = self.table.as_lists()
+        
+        mintrange = 99999.
+        for tstart, tend in times:
+            trange = tstart-tend 
+            mintrange = trange if trange < mintrange else 99999.
+        return mintrange
 
     def get_tfade(self):
         return self.tfade
@@ -233,7 +259,7 @@ s2 = DCSourceWid(lat=float(lat_s2),
              dip=80.,
              rake=-30.,
              magnitude=1.5,
-             store_id=store_ids[0])
+             store_id=store_ids[1])
 
 t = Target(lat=lat,
            lon=lon,
@@ -246,11 +272,11 @@ e = LocalEngine(store_superdirs=superdirs)
 
 testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
 #chopper = Chopper('first(p|P)', 'first(s|S)', fade_factor=0.3)
-chopper = Chopper('first(p|P)', fixed_length=0.3, fade_factor=0.3)
+chopper = Chopper('first(s|S)', fixed_length=3, fade_factor=0.3)
 testcouple.process(chopper=chopper)
 testcouple.q('p')
 testcouple.plot()
-plt.show()
+#plt.show()
 # END
 # ------------------------------------------------------------------------------------------
 sys.exit(0)
