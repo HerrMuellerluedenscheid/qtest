@@ -7,9 +7,24 @@ from scipy.stats import linregress
 import matplotlib.pyplot as plt
 import numpy as num
 import sys
+import os
 
-import pymutt
+try:
+    import pymutt
+except as e:
+    print e
+try:
+    from mtspec import mtspec
+except as e:
+    print e
 
+
+def test_data(f, deltat=1., samples=100, noise=False):
+    t = num.arange(0., samples*deltat, deltat)
+    ydata = num.sin(2*num.pi*f*t)
+    if noise:
+        ydata += num.random.randn(samples)
+    return ydata
 
 def multitaper_spectrum(tr):
     ydata = tr.get_ydata()
@@ -61,12 +76,26 @@ class Spectra(DDContainer):
     def plot_all(self):
         fig = plt.figure()
         ax = fig.add_subplot(111)
+        count = 0
+        for s, ta, fxfy in self.iterdd():
+            fx, fy = fxfy
+            color = colors[count%len(colors)]
+            ax.plot(fx, fy, label=ta.store_id, color=color)
+            count += 1
+        ax.autoscale()
+        #ax.set_yscale("log")
+        #ax.set_xscale("log")
+        #ax.legend()
+
+    def plot_all_with_linregress(self):
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
         fmin = 1.
         fmax = 20.
         regs = self.linregress(fmin=fmin, fmax=fmax)
         count = 0
         slopes = []
-        for s, ta, fxfy in self.specs.iterdd():
+        for s, ta, fxfy in self.iterdd():
             fx, fy = fxfy
             color = colors[count%len(colors)]
             ax.plot(fx, num.abs(fy), label=ta.store_id, color=color)
@@ -85,6 +114,7 @@ class Spectra(DDContainer):
                                 transform=ax.transAxes)
 
         ax.set_yscale("log")
+        ax.set_xscale("log")
         ax.legend()
 
     def linregress(self, fmin=-999, fmax=999):
@@ -99,16 +129,6 @@ class Spectra(DDContainer):
         return regressions
 
 
-class Spectrum():
-    """
-    TODO... 
-    """
-    def __init__(self, fxfy, target=None, source=None):
-        self.fx, self.fy = fxfy
-        self.target = target
-        self.source = source
-
-
 class SyntheticCouple():
     def __init__(self, master_slave, target, engine):
         self.master_slave = master_slave
@@ -117,9 +137,8 @@ class SyntheticCouple():
         self.spectra = Spectra()
         self.phase_table = None
 
-    def process(self, chopper):
+    def process(self, chopper, method='fft'):
         responses = []
-        #chopper.prepare(self.master_slave)
         for i,s in enumerate(self.master_slave):
             self.target.store_id = s.store_id
             response = e.process(sources=[s], targets=self.target)
@@ -129,9 +148,16 @@ class SyntheticCouple():
         
         chopper.chop(responses)
         for s, t, tr in chopper.iter_results():
-            #spect = tr.spectrum(tfade=chopper.get_tfade())
-            spect = pymutt.mtft(tr.ydata)
-            self.spectra.add(s, t, spect)
+            tr.set_ydata(test_data(f=0.3, deltat=tr.deltat, samples=len(tr.ydata),
+                                   noise=False))
+            if method=='fft':
+                f, a = tr.spectrum(tfade=chopper.get_tfade())
+            elif method=='mt':
+                r = pymutt.mtft(tr.ydata, dt=tr.deltat)
+                f = num.arange(r['nspec'])*r['df']
+                a = r['power']
+            elif method=='mtspec'
+            self.spectra.add(s, t, [f, num.abs(a)])
         
         self.phase_table = chopper.table
 
@@ -156,8 +182,6 @@ class SyntheticCouple():
         t1, t2 = arrivals[::-1]
         assert all(fxfy[0][0]==fxfy[1][0])
         q = num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
-        plt.plot(q)
-        plt.show()
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None, fade_factor=0., default_store=None):
@@ -274,18 +298,25 @@ t = Target(lat=lat,
            store_id=None)
 
 superdirs = ['/home/marius']
+superdirs.append(os.environ['STORES'])
 e = LocalEngine(store_superdirs=superdirs)
 
 testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
 #chopper = Chopper('first(p|P)', 'first(s|S)', fade_factor=0.3)
 chopper = Chopper('first(s|S)', fixed_length=3, fade_factor=0.3)
 testcouple.process(chopper=chopper)
-testcouple.q('p')
+#testcouple.q('p')
 testcouple.plot()
 #plt.show()
+plt.show()
 # END
 # ------------------------------------------------------------------------------------------
 sys.exit(0)
+
+
+
+
+
 traces = {}
 response = e.process(sources=sources, targets=targets)
 spectra = Spectra()
