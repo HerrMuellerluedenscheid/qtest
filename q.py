@@ -8,6 +8,12 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 
+import pymutt
+
+
+def multitaper_spectrum(tr):
+    ydata = tr.get_ydata()
+    xdata = tr.get_xdata()
 
 class DCSourceWid(DCSource):
     store_id = String.T(optional=True, default=None)
@@ -123,7 +129,9 @@ class SyntheticCouple():
         
         chopper.chop(responses)
         for s, t, tr in chopper.iter_results():
-            self.spectra.add(s, t, tr.spectrum(tfade=chopper.get_tfade()))
+            #spect = tr.spectrum(tfade=chopper.get_tfade())
+            spect = pymutt.mtft(tr.ydata)
+            self.spectra.add(s, t, spect)
         
         self.phase_table = chopper.table
 
@@ -150,8 +158,6 @@ class SyntheticCouple():
         q = num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
         plt.plot(q)
         plt.show()
-        print "asdfsadfasdf"
-        print q
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None, fade_factor=0., default_store=None):
