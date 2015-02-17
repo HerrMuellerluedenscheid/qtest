@@ -1,23 +1,50 @@
 from pyrocko.gf import *
 from pyrocko.guts import *
+from pyrocko import gui_util
 from pyrocko import orthodrome
 from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
+from scipy.optimize import curve_fit
+import matplotlib
+matplotlib.use('GTK')
 import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
 
+
+
+import logging 
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger()
+
+methods_avail = ['fft']
 try:
     import pymutt
-except as e:
-    print e
+    methods_avail.append('pymutt')
+except Exception as e:
+    logger.exception(e)
 try:
     from mtspec import mtspec
-except as e:
-    print e
+    methods_avail.append('mtspec')
+except Exception as e:
+    logger.exception(e)
 
+def _q(freqs, arrivals, slope):
+    # nach Scherbaum 1990
+    t1, t2 = arrivals
+    t = t2-t1
+
+    return -num.pi*num.array(freqs)*t/slope 
+
+def check_method(method):
+    if not method in methods_avail:
+        logger.exception("Method %s not available" % method)
+        raise Exception("Method %s not available" % method)
+    else: 
+        logger.debug('method used %s' %method)
+        return True
 
 def test_data(f, deltat=1., samples=100, noise=False):
     t = num.arange(0., samples*deltat, deltat)
@@ -31,6 +58,11 @@ def multitaper_spectrum(tr):
     xdata = tr.get_xdata()
 
 class DCSourceWid(DCSource):
+    store_id = String.T(optional=True, default=None)
+    def __init__(self, **kwargs):
+        DCSource.__init__(self, **kwargs)
+
+class HaskellSourceWid(RectangularSource):
     store_id = String.T(optional=True, default=None)
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
@@ -68,24 +100,49 @@ class DDContainer():
     
         return keys1, keys2, values
 
+def linear_fit(x, y, m):
+    return y+m*x
+
+def exp_fit(x, y, m):
+    return num.exp(y - m*x)
+
 class Spectra(DDContainer):
     def __init__(self, *args, **kwargs):
         DDContainer.__init__(self, args, kwargs)
-        self.specs = DDContainer()
+        self.fit_function = None
+
+    def set_fit_function(self, func):
+        self.fit_function = func
 
     def plot_all(self):
         fig = plt.figure()
         ax = fig.add_subplot(111)
         count = 0
         for s, ta, fxfy in self.iterdd():
-            fx, fy = fxfy
+            print fxfy
+            fx, fy = num.vsplit(fxfy, 2)
+            print fx, fy
+            
+            # line fitting
+            # in but only at f < fc
+            
+            fc = 1./s.risetime
+            slope_section = self.extract(fxfy, upper_lim=fc)
+            popt, pcov = curve_fit( self.fit_function, *slope_section)
+
             color = colors[count%len(colors)]
-            ax.plot(fx, fy, label=ta.store_id, color=color)
+            ax.plot(fx, fy, label=s.store_id, color=color)
+            ax.plot(fx, self.fit_function(fx, popt[0], popt[1]), label=s.store_id, color=color)
             count += 1
         ax.autoscale()
-        #ax.set_yscale("log")
+        ax.set_yscale("log")
         #ax.set_xscale("log")
-        #ax.legend()
+        ax.legend()
+
+    def extract(self, fxfy, upper_lim=0., lower_lim=99999.):
+        indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
+        return fxfy[0, indx], fxfy[1, indx]
+
 
     def plot_all_with_linregress(self):
         fig = plt.figure()
@@ -106,7 +163,7 @@ class Spectra(DDContainer):
             ax.plot(fx[indx],num.exp(linreg[indx]), label=ta.store_id,
                     color=color)
             count += 1
-
+        
         handles, labels = ax.get_legend_handles_labels()
         slope_string = '\n'.join(map(str, slopes))
         ax.text(0.1,0.9,slope_string, verticalalignment='top',
@@ -118,15 +175,21 @@ class Spectra(DDContainer):
         ax.legend()
 
     def linregress(self, fmin=-999, fmax=999):
-        regressions = defaultdict(dict)
-        for s, ta, fxfy in self.specs.iterdd():
+        regressions = DDContainer()
+        for s, ta, fxfy in self.iterdd():
             fx, fy = fxfy
             indx = num.where(num.logical_and(fx>=fmin, fx<=fmax))
             slope, interc, r_value, p_value, stderr = linregress(fx[indx],
                     num.log(num.abs(fy[indx])))
-            regressions[s][ta] = (slope, interc)
+            regressions.add(s, ta, (slope, interc))
         
         return regressions
+
+    def iter_linefit(self, func=None):
+        if func==None:
+            func=self.fit_function
+        for s,ta,fxfy in self.iterdd():
+            yield s, ta, curve_fit(func, *fxfy)
 
 
 class SyntheticCouple():
@@ -137,7 +200,8 @@ class SyntheticCouple():
         self.spectra = Spectra()
         self.phase_table = None
 
-    def process(self, chopper, method='fft'):
+    def process(self, chopper, method='mtspec'):
+        check_method(method)
         responses = []
         for i,s in enumerate(self.master_slave):
             self.target.store_id = s.store_id
@@ -148,25 +212,48 @@ class SyntheticCouple():
         
         chopper.chop(responses)
         for s, t, tr in chopper.iter_results():
-            tr.set_ydata(test_data(f=0.3, deltat=tr.deltat, samples=len(tr.ydata),
-                                   noise=False))
             if method=='fft':
+                # fuehrt zum amplitudenspektrum
                 f, a = tr.spectrum(tfade=chopper.get_tfade())
-            elif method=='mt':
+
+            elif method=='pymutt':
+                # berechnet die power spectral density
                 r = pymutt.mtft(tr.ydata, dt=tr.deltat)
                 f = num.arange(r['nspec'])*r['df']
                 a = r['power']
-            elif method=='mtspec'
-            self.spectra.add(s, t, [f, num.abs(a)])
+
+            elif method=='mtspec':
+                # nfft -> zero padding
+                a, f = mtspec(data=tr.ydata,
+                              delta=tr.deltat,
+                              number_of_tapers=5,
+                              time_bandwidth=2,
+                              nfft=150,
+                              statistics=False)
+            fxfy = num.vstack((f,a))
+            self.spectra.add(s, t, fxfy)
         
         self.phase_table = chopper.table
 
     def plot(self):
+        #self.spectra.plot_all_with_linregress()
         self.spectra.plot_all()
+    
+    def set_fit_function(self, func):
+        self.spectra.set_fit_function(func)
+
+    def slope(self, phasestr):
+        f_corner = 3
+        for s,ta, fit in self.spectra.linefit(self.fit_function):
+            print fit
+        #regressions = self.spectra.linregress(fmin=f_corner)
+        #slopes = []
+        #for s, ta, regress in regressions.iterdd():
+        #    slopes.append(regresses)        
         
-    def q(self, phasestr):
-        # following eqn:
-        # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
+
+        
+    def q_scherbaum(self, phasestr):
 
         sources, targets, fxfy = self.spectra.as_lists()
         dists = num.zeros(len(sources))
@@ -179,19 +266,27 @@ class SyntheticCouple():
                                                 (sources[i].depth, dists[i]))
             freqs.append(fxfy[i][0])
             A.append(num.abs(fxfy[i][1]))
-        t1, t2 = arrivals[::-1]
         assert all(fxfy[0][0]==fxfy[1][0])
-        q = num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
+        #regresses = self.spectra.linregress(1,20)
+        #slope = regresses[1]/regresses[0]
+        print 'WARNING: hard coded slope'
+        slope = 0.3049/0.25
+        plt.plot(fxfy[0], _q(fxfy[1], arrivals[::-1], slope=slope))
+
+    def _q_1(self, fxfy, A, dists, arrivals):
+        # following eqn:
+        # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
+        t1, t2 = arrivals
+        return num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
 
 class Chopper():
-    def __init__(self, startphasestr, endphasestr=None, fixed_length=None, fade_factor=0., default_store=None):
+    def __init__(self, startphasestr, endphasestr=None, fixed_length=None, phase_position=0., default_store=None):
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
-        self.fade_factor = fade_factor
+        self.phase_position = phase_position
         self.fixed_length = fixed_length
         self.current_store = default_store
         self.table = DDContainer()
-        self.tfade = 0.
         self.chopped = DDContainer()
 
     def chop(self, responses):
@@ -205,7 +300,7 @@ class Chopper():
                 targets.append(ta)
                 traces.append(tr)
 
-        deltat = max(traces, key=lambda x: x.deltat).deltat
+        #deltat = max(traces, key=lambda x: x.deltat).deltat
         trange = self.set_trange()
         returntraces = []
         for i in range(len(sources)):
@@ -221,9 +316,18 @@ class Chopper():
                 tend = self.fixed_length+tstart
             else:
                 raise Exception('Need to define exactly one of endphasestr and fixed length')
-            self.tfade = (tend-tstart)*self.fade_factor
+
+            
+            # aufraeumen! 
+            logger.info('lowpass filter with 0.5/nyquist')
+            tr.lowpass(4, 0.4/tr.deltat)
+            trange = tend-tstart
+            tstart -= trange*self.phase_position
+            tend -= trange*self.phase_position
+            mark = gui_util.PhaseMarker(tmin=tstart, tmax=tend,
+                                        nslc_ids=[tr.nslc_id])
             tr.chop(tstart, tend)
-            tr.downsample_to(deltat)
+            #tr.downsample_to(deltat)
             returntraces.append(tr)
             self.chopped.add(s,t,tr)
         
@@ -245,9 +349,6 @@ class Chopper():
             trange = tstart-tend 
             mintrange = trange if trange < mintrange else 99999.
         return mintrange
-
-    def get_tfade(self):
-        return self.tfade
     
 #100Hz
 #store_ids = ['vogtland_%s'%i for i in [1,2,3]]
@@ -273,23 +374,47 @@ t = Target(lat=lat,
 lat_s, lon_s = orthodrome.ne_to_latlon(lat, lon, dist1, 0.)
 lat_s2, lon_s2 = orthodrome.ne_to_latlon(lat, lon, dist2, 0.)
 
-s1 = DCSourceWid(lat=float(lat_s),
-             lon=float(lon_s),
-             depth=depth,
-             strike=170.,
-             dip=80.,
-             rake=-30.,
-             magnitude=1.5, 
-             store_id=store_ids[0])
+s1 = HaskellSourceWid(lat=float(lat_s),
+                      lon=float(lon_s),
+                      depth=depth,
+                      strike=170.,
+                      dip=80.,
+                      rake=-30.,
+                      magnitude=1.5, 
+                      length=200.,
+                      width=150.,
+                      risetime=0.4,
+                      store_id=store_ids[0])
 
-s2 = DCSourceWid(lat=float(lat_s2),
-             lon=float(lon_s2),
-             depth=depth,
-             strike=170.,
-             dip=80.,
-             rake=-30.,
-             magnitude=1.5,
-             store_id=store_ids[1])
+s2 = HaskellSourceWid(lat=float(lat_s),
+                      lon=float(lon_s),
+                      depth=depth,
+                      strike=170.,
+                      dip=80.,
+                      rake=-30.,
+                      magnitude=1.5,
+                      length=200.,
+                      width=150.,
+                      risetime=0.4,
+                      store_id=store_ids[1])
+
+#s1 = DCSourceWid(lat=float(lat_s),
+#             lon=float(lon_s),
+#             depth=depth,
+#             strike=170.,
+#             dip=80.,
+#             rake=-30.,
+#             magnitude=1.5, 
+#             store_id=store_ids[0])
+#
+#s2 = DCSourceWid(lat=float(lat_s2),
+#             lon=float(lon_s2),
+#             depth=depth,
+#             strike=170.,
+#             dip=80.,
+#             rake=-30.,
+#             magnitude=1.5,
+#             store_id=store_ids[1])
 
 t = Target(lat=lat,
            lon=lon,
@@ -302,12 +427,12 @@ superdirs.append(os.environ['STORES'])
 e = LocalEngine(store_superdirs=superdirs)
 
 testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
-#chopper = Chopper('first(p|P)', 'first(s|S)', fade_factor=0.3)
-chopper = Chopper('first(s|S)', fixed_length=3, fade_factor=0.3)
+#chopper = Chopper('first(p|P)', 'first(s|S)', phase_position=0.3)
+chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
 testcouple.process(chopper=chopper)
-#testcouple.q('p')
+#print testcouple.q('p')
+testcouple.set_fit_function(exp_fit)
 testcouple.plot()
-#plt.show()
 plt.show()
 # END
 # ------------------------------------------------------------------------------------------
@@ -322,7 +447,7 @@ response = e.process(sources=sources, targets=targets)
 spectra = Spectra()
 
 traces = []
-fade_factor = 0.5
+phase_position = 0.5
 for source, target, tr in response.iter_results():
     store = e.get_store(target.store_id)
     tstart = store.t('first(p|P)', (depth, dist))
@@ -331,7 +456,7 @@ for source, target, tr in response.iter_results():
     tend = 1.
 
     tend += tstart
-    tfade = (tend-tstart)*fade_factor
+    tfade = (tend-tstart)*phase_position 
     tend += tfade
     tstart -= tfade
     tr.station = target.store_id[-1]
@@ -342,5 +467,4 @@ for source, target, tr in response.iter_results():
 
     spectra.add(source, target, (fx, fy))
 spectra.plot_all()
-trace.snuffle(traces)
     
