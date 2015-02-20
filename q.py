@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Qt4Agg')
 from pyrocko.gf import *
 from pyrocko.guts import *
 from pyrocko import gui_util
@@ -6,18 +8,17 @@ from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
-import matplotlib
-matplotlib.use('GTK')
 import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
 
 
-
 import logging 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger()
+
+km = 1000.
 
 methods_avail = ['fft']
 try:
@@ -37,6 +38,23 @@ def _q(freqs, arrivals, slope):
     t = t2-t1
 
     return -num.pi*num.array(freqs)*t/slope 
+
+def xy2targets(x, y, o_lat, o_lon, **kwargs):
+    targets = []
+    for xy in zip(x,y):
+        lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
+        kwargs.update({'lat':lat, 'lon':lon})
+        targets.append(Target(**kwargs))
+                   
+    return targets
+
+def plot_locations(items):
+    f = plt.figure()
+    ax = f.add_subplot(111)
+    for item in items:
+        ax.plot(item.lon, item.lat, 'o')
+    ax.set_title('locations')
+    plt.show()
 
 def check_method(method):
     if not method in methods_avail:
@@ -274,9 +292,9 @@ class Couples():
         return intersecting ,average_spectrum
 
 class SyntheticCouple():
-    def __init__(self, master_slave, target, engine):
+    def __init__(self, master_slave, targets, engine):
         self.master_slave = master_slave
-        self.target = target
+        self.targets = targets
         self.engine = engine
         self.spectra = Spectra()
         self.phase_table = None
@@ -284,12 +302,13 @@ class SyntheticCouple():
     def process(self, chopper, method='mtspec'):
         check_method(method)
         responses = []
-        for i,s in enumerate(self.master_slave):
-            self.target.store_id = s.store_id
-            response = e.process(sources=[s], targets=self.target)
-            store = self.engine.get_store(s.store_id)
-            chopper.update(store, s, self.target)
-            responses.append(response)
+        for i, s in enumerate(self.master_slave):
+            for t in self.targets:
+                t.store_id = s.store_id
+                response = e.process(sources=[s], targets=[t])
+                store = self.engine.get_store(s.store_id)
+                chopper.update(store, s, t)
+                responses.append(response)
         
         chopper.chop(responses)
         for s, t, tr in chopper.iter_results():
@@ -311,6 +330,7 @@ class SyntheticCouple():
                               time_bandwidth=2,
                               nfft=150,
                               statistics=False)
+
             fxfy = num.vstack((f,a))
             self.spectra.add(s, t, fxfy)
         
@@ -363,6 +383,28 @@ class SyntheticCouple():
         # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
         t1, t2 = arrivals
         return num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
+
+    def get_average_spectra(self):
+        """Returns average source spectra for master and slave event"""
+        fx_master = []
+        fy_master = []
+        fx_slave = []
+        fy_slave = []
+        for s, ta, fxfy in self.spectra.iterdd():
+            if s.is_slave:
+                fx_slave.append(list(fxfy[0]))
+                fy_slave.append(fxfy[1])
+
+            if s.is_master:
+                fx_master.append(list(fxfy[0]))
+                fy_master.append(fxfy[1])
+
+        fy_master= num.asarray(fy_master)
+        fy_slave = num.asarray(fy_slave)
+        intersecting_master, average_spectrum_master = average_spectra(fx_master, fy_master)
+        intersecting_slave, average_spectrum_slave = average_spectra(fx_slave, fy_slave)
+        return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
+        
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None, phase_position=0., default_store=None):
@@ -435,6 +477,12 @@ class Chopper():
             mintrange = trange if trange < mintrange else 99999.
         return mintrange
     
+
+x_targets = num.array([0,0,0,0,-10,-5,5,10])
+y_targets = num.array([-10,-5,5,10,0,0,0,0])
+x_targets *= km
+y_targets *= km
+
 #100Hz
 #store_ids = ['vogtland_%s'%i for i in [1,2,3]]
 # 50Hz
@@ -443,97 +491,71 @@ store_ids = ['vogtland_%s'%i for i in [7, 6]]
 lat = 50.2059
 lon = 12.5152
 depth = 8500.
-dist1 = 10000.
-dist2 = 5000.
 
 sources = []
 targets = [] 
 #for store_id in store_ids:
-t = Target(lat=lat,
-           lon=lon,
-           elevation=0,
-           codes=('', 'KVC', '', 'Z'),
-           store_id=None)
-#targets.append(t)
+target_kwargs = {'elevation': 0,
+                 'codes': ('', 'KVC', '', 'Z'),
+                 'store_id': None}
 
-lat_s, lon_s = orthodrome.ne_to_latlon(lat, lon, dist1, 0.)
-lat_s2, lon_s2 = orthodrome.ne_to_latlon(lat, lon, dist2, 0.)
+targets = xy2targets(x_targets, y_targets, lat, lon, **target_kwargs)
+#plot_locations(targets)
+
 slopes = [] 
 couples = Couples()
-for t in 
-#for s in num.linspace(0,180,11):
-    s1 = HaskellSourceWid(lat=float(lat_s),
-                          lon=float(lon_s),
-                          depth=depth,
-                          strike=170.,
-                          dip=80.,
-                          rake=-30.,
-                          magnitude=1.5, 
-                          length=400.,
-                          width=250.,
-                          risetime=0.6,
-                          store_id=store_ids[0],
-                          attitude='master')
-    
-    s2 = HaskellSourceWid(lat=float(lat_s),
-                          lon=float(lon_s),
-                          depth=depth,
-                          strike=s,
-                          dip=80.,
-                          rake=-30.,
-                          magnitude=1.5,
-                          length=400.,
-                          width=250.,
-                          risetime=0.6,
-                          store_id=store_ids[1], 
-                          attitude='slave')
-    
-    #s1 = DCSourceWid(lat=float(lat_s),
-    #             lon=float(lon_s),
-    #             depth=depth,
-    #             strike=170.,
-    #             dip=80.,
-    #             rake=-30.,
-    #             magnitude=1.5, 
-    #             store_id=store_ids[0])
-    #
-    #s2 = DCSourceWid(lat=float(lat_s2),
-    #             lon=float(lon_s2),
-    #             depth=depth,
-    #             strike=170.,
-    #             dip=80.,
-    #             rake=-30.,
-    #             magnitude=1.5,
-    #             store_id=store_ids[1])
-    
-    t = Target(lat=lat,
-               lon=lon,
-               elevation=0,
-               codes=('', 'KVC', '', 'Z'),
-               store_id=None)
-    
-    superdirs = ['/home/marius']
-    superdirs.append(os.environ['STORES'])
-    e = LocalEngine(store_superdirs=superdirs)
-    
-    testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
-    chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
-    #chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
-    testcouple.process(chopper=chopper)
-    #print testcouple.q('p')
-    testcouple.set_fit_function(exp_fit)
-    #testcouple.plot()
-    couples.append(testcouple)
-    slopes.append(testcouple.get_slopes())
+superdirs = ['/home/marius']
+superdirs.append(os.environ['STORES'])
+e = LocalEngine(store_superdirs=superdirs)
+chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
 
-compile_slopes(slopes)
+s1 = HaskellSourceWid(lat=float(lat),
+                      lon=float(lon),
+                      depth=depth,
+                      strike=170.,
+                      dip=80.,
+                      rake=-30.,
+                      magnitude=1.5, 
+                      length=400.,
+                      width=250.,
+                      risetime=0.6,
+                      store_id=store_ids[0],
+                      attitude='master')
+
+s2 = HaskellSourceWid(lat=float(lat),
+                      lon=float(lon),
+                      depth=depth,
+                      strike=170.,
+                      dip=80.,
+                      rake=-30.,
+                      magnitude=1.5,
+                      length=400.,
+                      width=250.,
+                      risetime=0.6,
+                      store_id=store_ids[1], 
+                      attitude='slave')
+    
+
+testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets, engine=e)
+#chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
+testcouple.process(chopper=chopper)
+testcouple.set_fit_function(exp_fit)
+#testcouple.plot()
+fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
+
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
-x, y = couples.get_average_spectrum()
-ax.plot(x,y, 'x')
+ax.plot(fx_ma, fy_ma, 'x', label="master")
+ax.plot(fx_sl, fy_sl, 'x', label="slave")
 ax.set_yscale('log')
 plt.show()
+couples.append(testcouple)
+slopes.append(testcouple.get_slopes())
+
+compile_slopes(slopes)
+
+#x, y = couples.get_average_spectrum()
 # END
 # ------------------------------------------------------------------------------------------
 sys.exit(0)
