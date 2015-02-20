@@ -53,9 +53,37 @@ def test_data(f, deltat=1., samples=100, noise=False):
         ydata += num.random.randn(samples)
     return ydata
 
-def multitaper_spectrum(tr):
-    ydata = tr.get_ydata()
-    xdata = tr.get_xdata()
+def compile_slopes(slopes):
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    for slope in slopes:
+        for s, ta, slope_data in slope.iterdd():
+            x, y, m, interc = slope_data
+            if s.attitude=='master':
+                ax.plot(x,y,'o',alpha=0.5)
+            else:
+                ax.plot(x,y,alpha=0.5)
+
+    ax.set_yscale("log")
+
+def intersect_all(*args):
+    for i, l in enumerate(args):
+        if i==0:
+            inters = num.intersect1d(l, args[1])
+        else:
+            try:
+                inters = num.intersect1d(inters, args[i+1])
+            except IndexError:
+                return inters
+
+def average_spectra(fxs, fys):
+    x_intersect = intersect_all(*fxs)
+    intersecting = num.zeros((len(x_intersect), len(fys)))
+    for i, fy in enumerate(fys):
+        indx = num.where(fxs[i]==x_intersect)
+        intersecting[:, i] = fy[indx]
+    
+    return x_intersect, num.mean(intersecting, 1)
 
 class DCSourceWid(DCSource):
     store_id = String.T(optional=True, default=None)
@@ -64,8 +92,18 @@ class DCSourceWid(DCSource):
 
 class HaskellSourceWid(RectangularSource):
     store_id = String.T(optional=True, default=None)
+    attitude = String.T(optional=True, default=None)
+
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
+
+    @property
+    def is_master(self):
+        return self.attitude=='master'
+    
+    @property
+    def is_slave(self):
+        return self.attitude=='slave'
 
 # Eine station aus dem webnet
 # KVC
@@ -114,34 +152,55 @@ class Spectra(DDContainer):
     def set_fit_function(self, func):
         self.fit_function = func
 
+    def get_slopes(self):
+        slopes = DDContainer()
+        for s, ta, fxfy in self.iterdd():
+            fx, fy = num.vsplit(fxfy, 2)
+            fc = 1./(0.5*s.risetime)
+            slope_section = self.extract(fxfy, upper_lim=fc, lower_lim=22)
+            popt, pcov = curve_fit( self.fit_function, *slope_section)
+            fy_fit = self.fit_function(slope_section[0], popt[0], popt[1]),
+            slopes.add(s, ta, [slope_section[0], num.array(fy_fit).T, popt[0], popt[1]])
+
+        return slopes
+
     def plot_all(self):
         fig = plt.figure()
         ax = fig.add_subplot(111)
         count = 0
+        slopes = self.get_slopes()
         for s, ta, fxfy in self.iterdd():
-            print fxfy
             fx, fy = num.vsplit(fxfy, 2)
-            print fx, fy
             
-            # line fitting
-            # in but only at f < fc
-            
-            fc = 1./s.risetime
-            slope_section = self.extract(fxfy, upper_lim=fc)
-            popt, pcov = curve_fit( self.fit_function, *slope_section)
-
+            #redundant
+            #fc = 1./(0.5*s.risetime)
+            #slope_section = self.extract(fxfy, upper_lim=fc, lower_lim=22)
+            #popt, pcov = curve_fit( self.fit_function, *slope_section)
             color = colors[count%len(colors)]
-            ax.plot(fx, fy, label=s.store_id, color=color)
-            ax.plot(fx, self.fit_function(fx, popt[0], popt[1]), label=s.store_id, color=color)
+            ax.plot(fx.T, fy.T, label=s.store_id, color=color)
+            slope = slopes[(s,ta)]
+            print slope[0].shape
+            print slope[1].shape
+            ax.plot(slope[0], slope[1], 'o', label=s.store_id, color=color)
+            #slopes.append(popt[0])
             count += 1
         ax.autoscale()
         ax.set_yscale("log")
-        #ax.set_xscale("log")
+        # slopes hat jetzt 4 eintraege. von interesse: 3 
+        slope_string = ''
+        for s, ta, slope_data in slopes.iterdd():
+            print slopes
+            slope_string += '%s\n'%slope_data[2]
+        ax.text(0.1,0.9,slope_string, verticalalignment='top',
+                                horizontalalignment='left', 
+                                transform=ax.transAxes)
+
         ax.legend()
 
     def extract(self, fxfy, upper_lim=0., lower_lim=99999.):
         indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
-        return fxfy[0, indx], fxfy[1, indx]
+        indx = num.array(indx)
+        return fxfy[:, indx].reshape(2, len(indx.T))
 
 
     def plot_all_with_linregress(self):
@@ -164,7 +223,6 @@ class Spectra(DDContainer):
                     color=color)
             count += 1
         
-        handles, labels = ax.get_legend_handles_labels()
         slope_string = '\n'.join(map(str, slopes))
         ax.text(0.1,0.9,slope_string, verticalalignment='top',
                                 horizontalalignment='left', 
@@ -191,6 +249,29 @@ class Spectra(DDContainer):
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
 
+class Couples():
+    def __init__(self, couples=None):
+        if couples==None:
+            couples= []
+        self.couples = couples 
+
+    def append(self, item):
+        self.couples.append(item)
+
+    def get_average_spectrum(self):
+        fxs = []
+        fys = []
+        for couple in self.couples:
+            spectra = couple.get_spectra()
+            for s, ta, fxfy in spectra.iterdd():
+                if s.is_slave:
+                    fxs.append(list(fxfy[0]))
+                    fys.append(fxfy[1])
+
+        #fxs = num.asarray(fxs)
+        fys = num.asarray(fys)
+        intersecting, average_spectrum = average_spectra(fxs, fys)
+        return intersecting ,average_spectrum
 
 class SyntheticCouple():
     def __init__(self, master_slave, target, engine):
@@ -236,7 +317,6 @@ class SyntheticCouple():
         self.phase_table = chopper.table
 
     def plot(self):
-        #self.spectra.plot_all_with_linregress()
         self.spectra.plot_all()
     
     def set_fit_function(self, func):
@@ -252,7 +332,12 @@ class SyntheticCouple():
         #    slopes.append(regresses)        
         
 
-        
+    def get_slopes(self):
+        return self.spectra.get_slopes()
+
+    def get_spectra(self):
+        return self.spectra
+
     def q_scherbaum(self, phasestr):
 
         sources, targets, fxfy = self.spectra.as_lists()
@@ -373,98 +458,82 @@ t = Target(lat=lat,
 
 lat_s, lon_s = orthodrome.ne_to_latlon(lat, lon, dist1, 0.)
 lat_s2, lon_s2 = orthodrome.ne_to_latlon(lat, lon, dist2, 0.)
+slopes = [] 
+couples = Couples()
+for t in 
+#for s in num.linspace(0,180,11):
+    s1 = HaskellSourceWid(lat=float(lat_s),
+                          lon=float(lon_s),
+                          depth=depth,
+                          strike=170.,
+                          dip=80.,
+                          rake=-30.,
+                          magnitude=1.5, 
+                          length=400.,
+                          width=250.,
+                          risetime=0.6,
+                          store_id=store_ids[0],
+                          attitude='master')
+    
+    s2 = HaskellSourceWid(lat=float(lat_s),
+                          lon=float(lon_s),
+                          depth=depth,
+                          strike=s,
+                          dip=80.,
+                          rake=-30.,
+                          magnitude=1.5,
+                          length=400.,
+                          width=250.,
+                          risetime=0.6,
+                          store_id=store_ids[1], 
+                          attitude='slave')
+    
+    #s1 = DCSourceWid(lat=float(lat_s),
+    #             lon=float(lon_s),
+    #             depth=depth,
+    #             strike=170.,
+    #             dip=80.,
+    #             rake=-30.,
+    #             magnitude=1.5, 
+    #             store_id=store_ids[0])
+    #
+    #s2 = DCSourceWid(lat=float(lat_s2),
+    #             lon=float(lon_s2),
+    #             depth=depth,
+    #             strike=170.,
+    #             dip=80.,
+    #             rake=-30.,
+    #             magnitude=1.5,
+    #             store_id=store_ids[1])
+    
+    t = Target(lat=lat,
+               lon=lon,
+               elevation=0,
+               codes=('', 'KVC', '', 'Z'),
+               store_id=None)
+    
+    superdirs = ['/home/marius']
+    superdirs.append(os.environ['STORES'])
+    e = LocalEngine(store_superdirs=superdirs)
+    
+    testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
+    chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
+    #chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
+    testcouple.process(chopper=chopper)
+    #print testcouple.q('p')
+    testcouple.set_fit_function(exp_fit)
+    #testcouple.plot()
+    couples.append(testcouple)
+    slopes.append(testcouple.get_slopes())
 
-s1 = HaskellSourceWid(lat=float(lat_s),
-                      lon=float(lon_s),
-                      depth=depth,
-                      strike=170.,
-                      dip=80.,
-                      rake=-30.,
-                      magnitude=1.5, 
-                      length=200.,
-                      width=150.,
-                      risetime=0.4,
-                      store_id=store_ids[0])
+compile_slopes(slopes)
 
-s2 = HaskellSourceWid(lat=float(lat_s),
-                      lon=float(lon_s),
-                      depth=depth,
-                      strike=170.,
-                      dip=80.,
-                      rake=-30.,
-                      magnitude=1.5,
-                      length=200.,
-                      width=150.,
-                      risetime=0.4,
-                      store_id=store_ids[1])
-
-#s1 = DCSourceWid(lat=float(lat_s),
-#             lon=float(lon_s),
-#             depth=depth,
-#             strike=170.,
-#             dip=80.,
-#             rake=-30.,
-#             magnitude=1.5, 
-#             store_id=store_ids[0])
-#
-#s2 = DCSourceWid(lat=float(lat_s2),
-#             lon=float(lon_s2),
-#             depth=depth,
-#             strike=170.,
-#             dip=80.,
-#             rake=-30.,
-#             magnitude=1.5,
-#             store_id=store_ids[1])
-
-t = Target(lat=lat,
-           lon=lon,
-           elevation=0,
-           codes=('', 'KVC', '', 'Z'),
-           store_id=None)
-
-superdirs = ['/home/marius']
-superdirs.append(os.environ['STORES'])
-e = LocalEngine(store_superdirs=superdirs)
-
-testcouple = SyntheticCouple(master_slave=[s1, s2], target=t, engine=e)
-#chopper = Chopper('first(p|P)', 'first(s|S)', phase_position=0.3)
-chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
-testcouple.process(chopper=chopper)
-#print testcouple.q('p')
-testcouple.set_fit_function(exp_fit)
-testcouple.plot()
+fig = plt.figure()
+ax = fig.add_subplot(111)
+x, y = couples.get_average_spectrum()
+ax.plot(x,y, 'x')
+ax.set_yscale('log')
 plt.show()
 # END
 # ------------------------------------------------------------------------------------------
 sys.exit(0)
-
-
-
-
-
-traces = {}
-response = e.process(sources=sources, targets=targets)
-spectra = Spectra()
-
-traces = []
-phase_position = 0.5
-for source, target, tr in response.iter_results():
-    store = e.get_store(target.store_id)
-    tstart = store.t('first(p|P)', (depth, dist))
-    tstart += source.time
-    #tend = store.t('first(s|S)', (depth, dist))
-    tend = 1.
-
-    tend += tstart
-    tfade = (tend-tstart)*phase_position 
-    tend += tfade
-    tstart -= tfade
-    tr.station = target.store_id[-1]
-    traces.append(tr.copy())
-    tr.chop(tstart, tend)
-    traces.append(tr)
-    fx, fy = tr.spectrum(tfade=tfade)
-
-    spectra.add(source, target, (fx, fy))
-spectra.plot_all()
-    
