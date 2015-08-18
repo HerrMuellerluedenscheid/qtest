@@ -1,5 +1,7 @@
 import matplotlib
 matplotlib.use('Qt4Agg')
+matplotlib.rc('ytick', labelsize=8) 
+matplotlib.rc('xtick', labelsize=8) 
 from pyrocko.gf import *
 from pyrocko.guts import *
 from pyrocko import gui_util
@@ -44,18 +46,33 @@ def _q(freqs, arrivals, slope):
 def xy2targets(x, y, o_lat, o_lon, **kwargs):
     targets = []
     for xy in zip(x,y):
-        lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
-        kwargs.update({'lat':lat, 'lon':lon})
-        targets.append(Target(**kwargs))
+        for c in 'NEZ':
+            lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
+            kwargs.update({'lat':lat, 'lon':lon, channel=c})
+            targets.append(Target(**kwargs))
                    
     return targets
 
 def plot_locations(items):
-    f = plt.figure()
+    f = plt.figure(figsize=(3,3))
     ax = f.add_subplot(111)
+    lats = []
+    lons = []
     for item in items:
-        ax.plot(item.lon, item.lat, 'o')
+        ax.plot(item.lon, item.lat, 'og')
+        lats.append(item.lat)
+        lons.append(item.lon)
+        
+    ax.plot(num.mean(lons), num.mean(lats), 'xg')
     ax.set_title('locations')
+    ax.set_xlabel('lon', size=7)
+    ax.set_ylabel('lat', size=7)
+
+    y_range = num.max(lats)-num.min(lats)
+    x_range = num.max(lons)-num.min(lons)
+    ax.set_ylim([num.min(lats)-0.05*y_range, num.max(lats)+0.05*y_range])
+    ax.set_xlim([num.min(lons)-0.05*x_range, num.max(lons)+0.05*x_range])
+    f.savefig("locations_plot.png", dpi=160., bbox_inches='tight', pad_inches=0.01)
     plt.show()
 
 def check_method(method):
@@ -104,6 +121,11 @@ def average_spectra(fxs, fys):
         intersecting[:, i] = fy[indx]
     
     return x_intersect, num.mean(intersecting, 1)
+
+def extract(fxfy, upper_lim=0., lower_lim=99999.):
+    indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
+    indx = num.array(indx)
+    return fxfy[:, indx].reshape(2, len(indx.T))
 
 class DCSourceWid(DCSource):
     store_id = String.T(optional=True, default=None)
@@ -177,7 +199,7 @@ class Spectra(DDContainer):
         for s, ta, fxfy in self.iterdd():
             fx, fy = num.vsplit(fxfy, 2)
             fc = 1./(0.5*s.risetime)
-            slope_section = self.extract(fxfy, upper_lim=fc, lower_lim=22)
+            slope_section = extract(fxfy, upper_lim=fc, lower_lim=22)
             popt, pcov = curve_fit( self.fit_function, *slope_section)
             fy_fit = self.fit_function(slope_section[0], popt[0], popt[1]),
             slopes.add(s, ta, [slope_section[0], num.array(fy_fit).T, popt[0], popt[1]])
@@ -192,10 +214,6 @@ class Spectra(DDContainer):
         for s, ta, fxfy in self.iterdd():
             fx, fy = num.vsplit(fxfy, 2)
             
-            #redundant
-            #fc = 1./(0.5*s.risetime)
-            #slope_section = self.extract(fxfy, upper_lim=fc, lower_lim=22)
-            #popt, pcov = curve_fit( self.fit_function, *slope_section)
             color = colors[count%len(colors)]
             ax.plot(fx.T, fy.T, label=s.store_id, color=color)
             slope = slopes[(s,ta)]
@@ -216,11 +234,6 @@ class Spectra(DDContainer):
                                 transform=ax.transAxes)
 
         ax.legend()
-
-    def extract(self, fxfy, upper_lim=0., lower_lim=99999.):
-        indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
-        indx = num.array(indx)
-        return fxfy[:, indx].reshape(2, len(indx.T))
 
 
     def plot_all_with_linregress(self):
@@ -300,6 +313,7 @@ class SyntheticCouple():
         self.engine = engine
         self.spectra = Spectra()
         self.phase_table = None
+        self.fit_function = None
 
     def process(self, chopper, method='mtspec'):
         check_method(method)
@@ -341,6 +355,7 @@ class SyntheticCouple():
     
     def set_fit_function(self, func):
         self.spectra.set_fit_function(func)
+        self.fit_function = func
 
     def slope(self, phasestr):
         f_corner = 3
@@ -383,6 +398,16 @@ class SyntheticCouple():
         # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
         t1, t2 = arrivals
         return num.pi*num.abs(num.array(fxfy[0][0]))*(t2-t1)/(num.log(A[0])+num.log(dists[0])-num.log(A[1])-num.log(dists[1]))
+
+    def get_average_slopes(self, upper_lim=0., lower_lim=9999):
+        x_master, y_master, x_slave, y_slave = self.get_average_spectra()
+        fits = []
+        for fxfy in [num.array([x_master, y_master]), num.array([x_slave, y_slave])]:
+            slope_section = extract(fxfy, upper_lim=upper_lim, lower_lim=lower_lim)
+            popt, pcov = curve_fit( self.fit_function, *slope_section)
+            fits.append([popt, pcov])
+
+        return fits
 
     def get_average_spectra(self):
         """Returns average source spectra for master and slave event"""
@@ -503,6 +528,13 @@ class Chopper():
             trange = tstart-tend 
             mintrange = trange if trange < mintrange else 99999.
         return mintrange
+
+    def set_tfade(self, tfade):
+        '''only needed for method fft'''
+        self.tfade = tfade
+
+    def get_tfade(self):
+        return self.tfade
     
 
 #x_targets = num.array([0,0,0,0,-10,-5,5,10])
@@ -532,7 +564,7 @@ target_kwargs = {'elevation': 0,
                  'store_id': None}
 
 targets = xy2targets(x_targets, y_targets, lat, lon, **target_kwargs)
-#plot_locations(targets)
+plot_locations(targets)
 
 slopes = [] 
 couples = Couples()
@@ -604,6 +636,7 @@ testcouple.set_fit_function(exp_fit)
 #testcouple.plot()
 fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
 
+slope_ratio = m_slopes/s_slopes
 
 fig = plt.figure()
 ax = fig.add_subplot(111)
@@ -612,10 +645,12 @@ ax.plot(fx_sl, fy_sl, 'o', label="slave")
 ax.set_yscale('log')
 ax.set_xscale('log')
 plt.show()
-couples.append(testcouple)
-slopes.append(testcouple.get_slopes())
 
-compile_slopes(slopes)
+
+##couples.append(testcouple)
+#slopes.append(testcouple.get_slopes())
+#
+#compile_slopes(slopes)
 
 #x, y = couples.get_average_spectrum()
 # END
