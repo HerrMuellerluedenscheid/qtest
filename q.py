@@ -5,6 +5,8 @@ from pyrocko.guts import *
 from pyrocko import gui_util
 from pyrocko import orthodrome
 from pyrocko import trace
+from pyrocko.fomosto import qseis
+
 from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
@@ -12,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
-
+from micro_engine import OnDemandEngine, OnDemandStore
 
 import logging 
 logging.basicConfig(level=logging.DEBUG)
@@ -306,8 +308,7 @@ class SyntheticCouple():
             for t in self.targets:
                 t.store_id = s.store_id
                 response = self.engine.process(sources=[s], targets=[t])
-                store = self.engine.get_store(s.store_id)
-                chopper.update(store, s, t)
+                chopper.update(self.engine, s, t)
                 responses.append(response)
         
         chopper.chop(responses)
@@ -476,12 +477,23 @@ class Chopper():
     def iter_results(self):
         return self.chopped.iterdd()
 
-    def update(self, store, source, target):
+    def update(self, engine, source, target):
         depth = source.depth
         dist = source.distance_to(target)
-        tstart = store.t(self.startphasestr, (depth, dist))
-        tend = store.t(self.endphasestr, (depth, dist))
-        self.table.add(store.config.id, (depth, dist), (tstart, tend))
+        if isinstance(engine, LocalEngine):
+            store = engine.get_store(source.store_id)
+            tstart = store.t(self.startphasestr, (depth, dist))
+            tend = store.t(self.endphasestr, (depth, dist))
+            model_id = store.store_id
+        elif isinstance(engine, OnDemandEngine):
+            tstart = engine.config.earthmodel_1d.arrivals((self.startphasestr,
+                                                           (depth, dist)))
+            tend = engine.config.earthmodel_1d.arrivals((self.startphasestr,
+                                                           (depth, dist)))
+            model_id = engine.config.earthmodel_id
+
+        self.table.add(model_id, (depth, dist), (tstart, tend))
+
 
     def set_trange(self):
         _,_, times = self.table.as_lists()
@@ -493,11 +505,10 @@ class Chopper():
         return mintrange
     
 
-x_targets = num.array([0.])
-y_targets = num.array([0.])
-print y_targets
 #x_targets = num.array([0,0,0,0,-10,-5,5,10])
 #y_targets = num.array([-10,-5,5,10,0,0,0,0])
+x_targets = num.array([0])
+y_targets = num.array([0])
 x_targets *= km
 y_targets *= km
 
@@ -527,9 +538,31 @@ slopes = []
 couples = Couples()
 superdirs = ['/home/marius']
 superdirs.append(os.environ['STORES'])
-e = LocalEngine(store_superdirs=superdirs)
-chopper = Chopper('first(p|P)', fixed_length=.3, phase_position=0.45)
-#chopper = Chopper('first(s|S)', fixed_length=.3, phase_position=0.45)
+#e = LocalEngine(store_superdirs=superdirs)
+chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
+
+store_ids = ['test0', 'test1']
+
+config1 = qseis.QSeisConfigFull.example()
+config1.time_region = [meta.Timing(-10.), meta.Timing(30.)]
+config1.time_window = 40. 
+config1.nsamples = 40/0.5
+config1.earthmodel_id = store_ids[0]
+config1.earthmodel_1d = config1.earthmodel_1d.extract(0, 80000)
+
+config2 = qseis.QSeisConfigFull.example()
+config2.time_region = [meta.Timing(-10.), meta.Timing(30.)]
+config2.time_window = 40. 
+config2.nsamples = 40/0.5
+config2.earthmodel_id = [store_ids[1]]
+config2.earthmodel_1d = config2.earthmodel_1d.extract(0, 80000)
+
+
+configs = [config1, config2]
+on_demand_stores = []
+for i in range(2):
+    on_demand_stores.append(OnDemandStore(config=configs[i],
+                                          store_id=store_ids[i]))
 
 s1 = HaskellSourceWid(lat=float(lat),
                       lon=float(lon),
@@ -557,7 +590,14 @@ s2 = HaskellSourceWid(lat=float(lat),
                       store_id=store_ids[1], 
                       attitude='slave')
     
+traces_on_demand = OnDemandEngine(on_demand_stores=on_demand_stores)
+traces_on_demand.process(targets=targets, 
+                         sources=[s1, s2])
 testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets, engine=e)
+
+
+testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets,
+                             engine=traces_on_demand)
 #chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
 testcouple.process(chopper=chopper, method='mtspec')
 testcouple.set_fit_function(exp_fit)
