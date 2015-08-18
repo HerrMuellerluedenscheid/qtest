@@ -305,7 +305,7 @@ class SyntheticCouple():
         for i, s in enumerate(self.master_slave):
             for t in self.targets:
                 t.store_id = s.store_id
-                response = e.process(sources=[s], targets=[t])
+                response = self.engine.process(sources=[s], targets=[t])
                 store = self.engine.get_store(s.store_id)
                 chopper.update(store, s, t)
                 responses.append(response)
@@ -314,7 +314,7 @@ class SyntheticCouple():
         for s, t, tr in chopper.iter_results():
             if method=='fft':
                 # fuehrt zum amplitudenspektrum
-                f, a = tr.spectrum(tfade=chopper.get_tfade())
+                f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
 
             elif method=='pymutt':
                 # berechnet die power spectral density
@@ -326,11 +326,10 @@ class SyntheticCouple():
                 # nfft -> zero padding
                 a, f = mtspec(data=tr.ydata,
                               delta=tr.deltat,
-                              number_of_tapers=5,
-                              time_bandwidth=2,
-                              nfft=150,
+                              number_of_tapers=10,
+                              time_bandwidth=1.2,
+                              nfft=250,
                               statistics=False)
-
             fxfy = num.vstack((f,a))
             self.spectra.add(s, t, fxfy)
         
@@ -401,13 +400,21 @@ class SyntheticCouple():
 
         fy_master= num.asarray(fy_master)
         fy_slave = num.asarray(fy_slave)
-        intersecting_master, average_spectrum_master = average_spectra(fx_master, fy_master)
-        intersecting_slave, average_spectrum_slave = average_spectra(fx_slave, fy_slave)
+        if len(fx_master)>1:
+            intersecting_master, average_spectrum_master = average_spectra(fx_master, fy_master)
+        else:
+            intersecting_master, average_spectrum_master = fx_master[0], fy_master[0]
+        if len(fx_slave)>1:
+            intersecting_slave, average_spectrum_slave = average_spectra(fx_slave, fy_slave)
+        else:
+            intersecting_slave, average_spectrum_slave = fx_slave[0], fy_slave[0]
         return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
         
 
 class Chopper():
-    def __init__(self, startphasestr, endphasestr=None, fixed_length=None, phase_position=0., default_store=None):
+    def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
+                 phase_position=0., default_store=None, 
+                 xfade=0.2):
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
         self.phase_position = phase_position
@@ -415,6 +422,7 @@ class Chopper():
         self.current_store = default_store
         self.table = DDContainer()
         self.chopped = DDContainer()
+        self.xfade = xfade
 
     def chop(self, responses):
         sources = []
@@ -426,7 +434,8 @@ class Chopper():
                 sources.append(so)
                 targets.append(ta)
                 traces.append(tr)
-
+        import pdb 
+        pdb.set_trace()
         #deltat = max(traces, key=lambda x: x.deltat).deltat
         trange = self.set_trange()
         returntraces = []
@@ -457,7 +466,13 @@ class Chopper():
             #tr.downsample_to(deltat)
             returntraces.append(tr)
             self.chopped.add(s,t,tr)
-        
+    
+    def get_xfade(self):
+        return self.xfade
+
+    def get_tfade(self, t_span):
+        return self.xfade*t_span
+
     def iter_results(self):
         return self.chopped.iterdd()
 
@@ -478,8 +493,11 @@ class Chopper():
         return mintrange
     
 
-x_targets = num.array([0,0,0,0,-10,-5,5,10])
-y_targets = num.array([-10,-5,5,10,0,0,0,0])
+x_targets = num.array([0.])
+y_targets = num.array([0.])
+print y_targets
+#x_targets = num.array([0,0,0,0,-10,-5,5,10])
+#y_targets = num.array([-10,-5,5,10,0,0,0,0])
 x_targets *= km
 y_targets *= km
 
@@ -487,10 +505,13 @@ y_targets *= km
 #store_ids = ['vogtland_%s'%i for i in [1,2,3]]
 # 50Hz
 #store_ids = ['vogtland_%s'%i for i in [5,6,7]]
-store_ids = ['vogtland_%s'%i for i in [7, 6]]
+#store_ids = ['vogtland_%s'%i for i in [7, 6]]
+store_ids = ['test', 'test1']
+
 lat = 50.2059
 lon = 12.5152
-depth = 8500.
+depth1 = 8000.
+depth2 = 10000.
 
 sources = []
 targets = [] 
@@ -507,38 +528,38 @@ couples = Couples()
 superdirs = ['/home/marius']
 superdirs.append(os.environ['STORES'])
 e = LocalEngine(store_superdirs=superdirs)
-chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
+chopper = Chopper('first(p|P)', fixed_length=.3, phase_position=0.45)
+#chopper = Chopper('first(s|S)', fixed_length=.3, phase_position=0.45)
 
 s1 = HaskellSourceWid(lat=float(lat),
                       lon=float(lon),
-                      depth=depth,
+                      depth=depth2,
                       strike=170.,
                       dip=80.,
                       rake=-30.,
-                      magnitude=1.5, 
-                      length=400.,
-                      width=250.,
-                      risetime=0.6,
+                      magnitude=.5, 
+                      length=40.,
+                      width=25.,
+                      risetime=0.02,
                       store_id=store_ids[0],
                       attitude='master')
 
 s2 = HaskellSourceWid(lat=float(lat),
                       lon=float(lon),
-                      depth=depth,
+                      depth=depth2,
                       strike=170.,
                       dip=80.,
                       rake=-30.,
-                      magnitude=1.5,
-                      length=400.,
-                      width=250.,
-                      risetime=0.6,
+                      magnitude=.5,
+                      length=40.,
+                      width=25.,
+                      risetime=0.02,
                       store_id=store_ids[1], 
                       attitude='slave')
     
-
 testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets, engine=e)
 #chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
-testcouple.process(chopper=chopper)
+testcouple.process(chopper=chopper, method='mtspec')
 testcouple.set_fit_function(exp_fit)
 #testcouple.plot()
 fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
@@ -547,8 +568,9 @@ fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
 fig = plt.figure()
 ax = fig.add_subplot(111)
 ax.plot(fx_ma, fy_ma, 'x', label="master")
-ax.plot(fx_sl, fy_sl, 'x', label="slave")
+ax.plot(fx_sl, fy_sl, 'o', label="slave")
 ax.set_yscale('log')
+ax.set_xscale('log')
 plt.show()
 couples.append(testcouple)
 slopes.append(testcouple.get_slopes())
