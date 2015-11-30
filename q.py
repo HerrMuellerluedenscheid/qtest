@@ -2,11 +2,16 @@ import matplotlib
 matplotlib.use('Qt4Agg')
 matplotlib.rc('ytick', labelsize=8) 
 matplotlib.rc('xtick', labelsize=8) 
-from pyrocko.gf import *
+
+import multiprocessing
+
+from pyrocko.gf import meta, DCSource, RectangularSource, Target
 from pyrocko.guts import *
 from pyrocko import gui_util
 from pyrocko import orthodrome
 from pyrocko import trace
+from pyrocko import cake
+from pyrocko import crust2x2
 from pyrocko.fomosto import qseis
 
 from collections import defaultdict
@@ -16,10 +21,10 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
-from micro_engine import OnDemandEngine, OnDemandStore
-
+from micro_engine import OnDemandEngine, Tracer, create_store
+from autogain.autogain import PhasePie
 import logging 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
 km = 1000.
@@ -43,15 +48,48 @@ def _q(freqs, arrivals, slope):
 
     return -num.pi*num.array(freqs)*t/slope 
 
-def xy2targets(x, y, o_lat, o_lon, **kwargs):
+def add_noise(t, level):
+    ydata = t.get_ydata()
+    noise = num.random.random(len(ydata))-0.5
+    noise *= ((num.max(num.abs(ydata))) * level)
+    ydata += noise
+    t.set_ydata(ydata)
+    return t
+
+def legend_clear_duplicates(ax):
+    from collections import OrderedDict
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = OrderedDict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())
+
+
+def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
     targets = []
-    for xy in zip(x,y):
-        for c in 'NEZ':
+    for istat, xy in enumerate(zip(x,y)):
+        print istat
+        for c in channels:
             lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
-            kwargs.update({'lat':lat, 'lon':lon, channel=c})
+            kwargs.update({'lat': float(lat), 'lon': float(lon),
+                           'codes':('', '%i'%istat, '', c)})
             targets.append(Target(**kwargs))
-                   
     return targets
+
+def ax_if_needed(ax):
+    if not ax:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+    return ax
+
+def plot_traces(tr, ax=None, label='', color='r'):
+    ax = ax_if_needed(ax)
+    ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
+
+def plot_model(mod, ax=None, label='', color=None):
+    ax = ax_if_needed(ax)
+    z = mod.profile('z')
+    profile = mod.profile('qp')
+    ax.plot(profile, -z, label=label, c=color)
+    ax.set_title('Qp')
 
 def plot_locations(items):
     f = plt.figure(figsize=(3,3))
@@ -62,7 +100,7 @@ def plot_locations(items):
         ax.plot(item.lon, item.lat, 'og')
         lats.append(item.lat)
         lons.append(item.lon)
-        
+
     ax.plot(num.mean(lons), num.mean(lats), 'xg')
     ax.set_title('locations')
     ax.set_xlabel('lon', size=7)
@@ -73,22 +111,14 @@ def plot_locations(items):
     ax.set_ylim([num.min(lats)-0.05*y_range, num.max(lats)+0.05*y_range])
     ax.set_xlim([num.min(lons)-0.05*x_range, num.max(lons)+0.05*x_range])
     f.savefig("locations_plot.png", dpi=160., bbox_inches='tight', pad_inches=0.01)
-    plt.show()
 
 def check_method(method):
     if not method in methods_avail:
         logger.exception("Method %s not available" % method)
         raise Exception("Method %s not available" % method)
-    else: 
+    else:
         logger.debug('method used %s' %method)
         return True
-
-def test_data(f, deltat=1., samples=100, noise=False):
-    t = num.arange(0., samples*deltat, deltat)
-    ydata = num.sin(2*num.pi*f*t)
-    if noise:
-        ydata += num.random.randn(samples)
-    return ydata
 
 def compile_slopes(slopes):
     fig = plt.figure()
@@ -119,7 +149,7 @@ def average_spectra(fxs, fys):
     for i, fy in enumerate(fys):
         indx = num.where(fxs[i]==x_intersect)
         intersecting[:, i] = fy[indx]
-    
+
     return x_intersect, num.mean(intersecting, 1)
 
 def extract(fxfy, upper_lim=0., lower_lim=99999.):
@@ -133,7 +163,8 @@ class DCSourceWid(DCSource):
         DCSource.__init__(self, **kwargs)
 
 class HaskellSourceWid(RectangularSource):
-    store_id = String.T(optional=True, default=None)
+    #store_id = String.T(optional=True, default=None)
+    id = String.T(optional=True, default=None)
     attitude = String.T(optional=True, default=None)
 
     def __init__(self, **kwargs):
@@ -142,14 +173,13 @@ class HaskellSourceWid(RectangularSource):
     @property
     def is_master(self):
         return self.attitude=='master'
-    
+
     @property
     def is_slave(self):
         return self.attitude=='slave'
 
 # Eine station aus dem webnet
 # KVC
-colors = "rgbcmyb"
 
 class DDContainer():
     """ A Double Dict Container..."""
@@ -168,7 +198,7 @@ class DDContainer():
 
     def add(self, key1, key2, value):
         self.content[key1][key2] = value
-    
+
     def as_lists(self):
         keys1 = []
         keys2 = []
@@ -177,7 +207,7 @@ class DDContainer():
             keys1.append(k1)
             keys2.append(k2)
             values.append(v)
-    
+
         return keys1, keys2, values
 
 def linear_fit(x, y, m):
@@ -190,6 +220,7 @@ class Spectra(DDContainer):
     def __init__(self, *args, **kwargs):
         DDContainer.__init__(self, args, kwargs)
         self.fit_function = None
+        self.spectra = []
 
     def set_fit_function(self, func):
         self.fit_function = func
@@ -206,35 +237,36 @@ class Spectra(DDContainer):
 
         return slopes
 
-    def plot_all(self):
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
+    def plot_all(self, ax=None, colors=None, alpha=1.):
+        if not ax:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
         count = 0
-        slopes = self.get_slopes()
-        for s, ta, fxfy in self.iterdd():
+        #slopes = self.get_slopes()
+        #for s, ta, fxfy in self.iterdd():
+        for tracer, fxfy in self.spectra:
             fx, fy = num.vsplit(fxfy, 2)
-            
-            color = colors[count%len(colors)]
-            ax.plot(fx.T, fy.T, label=s.store_id, color=color)
-            slope = slopes[(s,ta)]
-            print slope[0].shape
-            print slope[1].shape
-            ax.plot(slope[0], slope[1], 'o', label=s.store_id, color=color)
+            if colors:
+                color = colors[tracer.config.id]
+            ax.plot(fx.T, fy.T, label=tracer.config.id, color=color, alpha=alpha)
+            #slope = slopes[(s,ta)]
+            #print slope[0].shape
+            #print slope[1].shape
+            #ax.plot(slope[0], slope[1], 'o', label=s.store_id, color=color)
             #slopes.append(popt[0])
             count += 1
         ax.autoscale()
         ax.set_yscale("log")
         # slopes hat jetzt 4 eintraege. von interesse: 3 
         slope_string = ''
-        for s, ta, slope_data in slopes.iterdd():
-            print slopes
-            slope_string += '%s\n'%slope_data[2]
-        ax.text(0.1,0.9,slope_string, verticalalignment='top',
-                                horizontalalignment='left', 
-                                transform=ax.transAxes)
-
+        #for s, ta, slope_data in slopes.iterdd():
+        #    print slopes
+        #    slope_string += '%s\n'%slope_data[2]
+#        ax.text(0.1,0.9,slope_string, verticalalignment='top',
+#                                horizontalalignment='left', 
+#                                transform=ax.transAxes)
+#
         ax.legend()
-
 
     def plot_all_with_linregress(self):
         fig = plt.figure()
@@ -255,7 +287,7 @@ class Spectra(DDContainer):
             ax.plot(fx[indx],num.exp(linreg[indx]), label=ta.store_id,
                     color=color)
             count += 1
-        
+
         slope_string = '\n'.join(map(str, slopes))
         ax.text(0.1,0.9,slope_string, verticalalignment='top',
                                 horizontalalignment='left', 
@@ -273,7 +305,7 @@ class Spectra(DDContainer):
             slope, interc, r_value, p_value, stderr = linregress(fx[indx],
                     num.log(num.abs(fy[indx])))
             regressions.add(s, ta, (slope, interc))
-        
+
         return regressions
 
     def iter_linefit(self, func=None):
@@ -282,77 +314,107 @@ class Spectra(DDContainer):
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
 
-class Couples():
-    def __init__(self, couples=None):
-        if couples==None:
-            couples= []
-        self.couples = couples 
+class UniqueColors():
+    def __init__(self):
+        self.all_colors = "rgbcmyb"
+        self.colors = {}
 
-    def append(self, item):
-        self.couples.append(item)
+    def __getitem__(self, key):
+        if not key in self.colors.keys():
+            for c in self.all_colors:
+                if c not in self.colors.values():
+                    self.colors[key] = c
+                    break
+            else:
+                raise Exception('AllColorsInUse')
+        return self.colors[key]
 
-    def get_average_spectrum(self):
-        fxs = []
-        fys = []
-        for couple in self.couples:
-            spectra = couple.get_spectra()
-            for s, ta, fxfy in spectra.iterdd():
-                if s.is_slave:
-                    fxs.append(list(fxfy[0]))
-                    fys.append(fxfy[1])
-
-        #fxs = num.asarray(fxs)
-        fys = num.asarray(fys)
-        intersecting, average_spectrum = average_spectra(fxs, fys)
-        return intersecting ,average_spectrum
 
 class SyntheticCouple():
-    def __init__(self, master_slave, targets, engine):
+    def __init__(self, master_slave):
         self.master_slave = master_slave
-        self.targets = targets
-        self.engine = engine
         self.spectra = Spectra()
+        self.noisy_spectra = Spectra()
         self.phase_table = None
         self.fit_function = None
+        self.use_trace_index = 2
+        self.colors = None
 
-    def process(self, chopper, method='mtspec'):
+    def process(self, chopper, method='mtspec', noise_level=0.0, repeat=1):
         check_method(method)
-        responses = []
-        for i, s in enumerate(self.master_slave):
-            for t in self.targets:
-                t.store_id = s.store_id
-                response = self.engine.process(sources=[s], targets=[t])
-                chopper.update(self.engine, s, t)
-                responses.append(response)
-        
-        chopper.chop(responses)
-        for s, t, tr in chopper.iter_results():
-            if method=='fft':
-                # fuehrt zum amplitudenspektrum
-                f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
+        #for i, s in enumerate(self.master_slave):
+        #    t.store_id = s.config.id
+        #    response = self.engine.process(sources=[s.source], targets=[s.target])
+        #    #chopper.update(self.engine, s, t)
+        #    responses.append(response)
 
-            elif method=='pymutt':
-                # berechnet die power spectral density
-                r = pymutt.mtft(tr.ydata, dt=tr.deltat)
-                f = num.arange(r['nspec'])*r['df']
-                a = r['power']
-
-            elif method=='mtspec':
-                # nfft -> zero padding
-                a, f = mtspec(data=tr.ydata,
-                              delta=tr.deltat,
-                              number_of_tapers=10,
-                              time_bandwidth=1.2,
-                              nfft=250,
-                              statistics=False)
+        for tracer in self.master_slave:
+            s = tracer.source
+            t = tracer.target
+            tr_raw = tracer.traces[self.use_trace_index]
+            tracer.processed = chopper.chop(s, t, tr_raw)
+            f, a = self.get_spectrum(tracer.processed, method, chopper)
             fxfy = num.vstack((f,a))
-            self.spectra.add(s, t, fxfy)
-        
-        self.phase_table = chopper.table
+            self.spectra.spectra.append((tracer, fxfy))
 
-    def plot(self):
-        self.spectra.plot_all()
-    
+            for i in xrange(repeat):
+                tr_noise = add_noise(tracer.processed, level=.05)
+                f, a = self.get_spectrum(tr_noise, method, chopper)
+                fxfy = num.vstack((f,a))
+                self.noisy_spectra.spectra.append((tracer, fxfy))
+
+
+    def get_spectrum(self, tr, method, chopper):
+        if method=='fft':
+            # fuehrt zum amplitudenspektrum
+            f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
+
+        elif method=='pymutt':
+            # berechnet die power spectral density
+            r = pymutt.mtft(tr.ydata, dt=tr.deltat)
+            f = num.arange(r['nspec'])*r['df']
+            a = r['power']
+
+        elif method=='mtspec':
+            # nfft -> zero padding
+            a, f = mtspec(data=tr.ydata,
+                          delta=tr.deltat,
+                          number_of_tapers=10,
+                          time_bandwidth=1.2,
+                          nfft=2**9,
+                          #nfft=250,
+                          statistics=False)
+
+        return f, a
+
+    def plot(self, **kwargs):
+        colors = kwargs.pop('colors', UniqueColors())
+        fig = plt.figure()
+        ax = fig.add_subplot(2,2,1)
+        self.spectra.plot_all(ax, colors=colors)
+        self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.06)
+        legend_clear_duplicates(ax)
+        ax = fig.add_subplot(2,2,2)
+        master, slave = self.master_slave 
+        plot_model(mod=master.config.earthmodel_1d,
+                   label=master.config.id,
+                   color=colors[master.config.id],
+                   ax=ax)
+
+        plot_model(mod=slave.config.earthmodel_1d,
+                   label=slave.config.id,
+                   color=colors[slave.config.id],
+                   ax=ax)
+
+        for tr in self.master_slave:
+            ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
+                       color=colors[tr.config.id])
+        ax.legend()
+        ax = fig.add_subplot(2, 2, 3)
+        for tracer in self.master_slave:
+            plot_traces(tr=tracer.processed, ax=ax, label=tr.config.id,
+                        color=colors[tracer.config.id])
+
     def set_fit_function(self, func):
         self.spectra.set_fit_function(func)
         self.fit_function = func
@@ -364,8 +426,7 @@ class SyntheticCouple():
         #regressions = self.spectra.linregress(fmin=f_corner)
         #slopes = []
         #for s, ta, regress in regressions.iterdd():
-        #    slopes.append(regresses)        
-        
+        #    slopes.append(regresses)
 
     def get_slopes(self):
         return self.spectra.get_slopes()
@@ -387,10 +448,10 @@ class SyntheticCouple():
             freqs.append(fxfy[i][0])
             A.append(num.abs(fxfy[i][1]))
         assert all(fxfy[0][0]==fxfy[1][0])
-        #regresses = self.spectra.linregress(1,20)
-        #slope = regresses[1]/regresses[0]
-        print 'WARNING: hard coded slope'
-        slope = 0.3049/0.25
+        regresses = self.spectra.linregress(1,20)
+        slope = regresses[1]/regresses[0]
+        #print 'WARNING: hard coded slope'
+        #slope = 0.3049/0.25
         plt.plot(fxfy[0], _q(fxfy[1], arrivals[::-1], slope=slope))
 
     def _q_1(self, fxfy, A, dists, arrivals):
@@ -435,64 +496,48 @@ class SyntheticCouple():
         else:
             intersecting_slave, average_spectrum_slave = fx_slave[0], fy_slave[0]
         return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
-        
+
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
-                 phase_position=0., default_store=None, 
-                 xfade=0.2):
+                 phase_position=0., xfade=0.2):
+        self.phase_pie = PhasePie()
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
         self.phase_position = phase_position
         self.fixed_length = fixed_length
-        self.current_store = default_store
-        self.table = DDContainer()
         self.chopped = DDContainer()
         self.xfade = xfade
 
-    def chop(self, responses):
-        sources = []
-        targets = [] 
-        traces = []
+    def chop(self, s, t, tr):
+        dist = s.distance_to(t)
+        depth = s.depth
+        tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
+        if self.endphasestr!=None and self.fixed_length==None:
+            tend = self.phase_pie.t(self.endphasestr, (depth, dist))
+        elif self.endphasestr==None and self.fixed_length!=None:
+            tend = self.fixed_length+tstart
+        else:
+            raise Exception('Need to define exactly one of endphasestr and fixed length')
+        tr_bkp = tr
+        # aufraeumen!
+        logger.info('lowpass filter with 0.5/nyquist')
+        tr = tr.copy()
+        tr.set_location('cp')
+        tr.lowpass(4, 0.5/tr.deltat)
 
-        for response in responses:
-            for so,ta,tr in response.iter_results():
-                sources.append(so)
-                targets.append(ta)
-                traces.append(tr)
-        import pdb 
-        pdb.set_trace()
-        #deltat = max(traces, key=lambda x: x.deltat).deltat
-        trange = self.set_trange()
-        returntraces = []
-        for i in range(len(sources)):
-            s = sources[i]
-            t = targets[i]
-            tr = traces[i]
-            dist = s.distance_to(t)
-            depth = s.depth
-            tstart, end = self.table[s.store_id, (depth, dist)]
-            if self.endphasestr!=None and self.fixed_length==None:
-                tend = tend
-            elif self.endphasestr==None and self.fixed_length!=None:
-                tend = self.fixed_length+tstart
-            else:
-                raise Exception('Need to define exactly one of endphasestr and fixed length')
+        trange = tend-tstart
+        tstart -= trange*self.phase_position
+        tend -= trange*self.phase_position
+        mark = gui_util.PhaseMarker(tmin=tstart, tmax=tend,
+                                    nslc_ids=[tr.nslc_id])
+        tr.chop(tstart*(1-self.get_xfade()), tend*(1+self.get_xfade()))
+        taperer = trace.CosFader(xfrac=self.get_xfade())
+        tr.taper(taperer)
+        self.chopped.add(s,t,tr)
+        trace.snuffle([tr, tr_bkp])
+        return tr
 
-            
-            # aufraeumen! 
-            logger.info('lowpass filter with 0.5/nyquist')
-            tr.lowpass(4, 0.4/tr.deltat)
-            trange = tend-tstart
-            tstart -= trange*self.phase_position
-            tend -= trange*self.phase_position
-            mark = gui_util.PhaseMarker(tmin=tstart, tmax=tend,
-                                        nslc_ids=[tr.nslc_id])
-            tr.chop(tstart, tend)
-            #tr.downsample_to(deltat)
-            returntraces.append(tr)
-            self.chopped.add(s,t,tr)
-    
     def get_xfade(self):
         return self.xfade
 
@@ -502,27 +547,9 @@ class Chopper():
     def iter_results(self):
         return self.chopped.iterdd()
 
-    def update(self, engine, source, target):
-        depth = source.depth
-        dist = source.distance_to(target)
-        if isinstance(engine, LocalEngine):
-            store = engine.get_store(source.store_id)
-            tstart = store.t(self.startphasestr, (depth, dist))
-            tend = store.t(self.endphasestr, (depth, dist))
-            model_id = store.store_id
-        elif isinstance(engine, OnDemandEngine):
-            tstart = engine.config.earthmodel_1d.arrivals((self.startphasestr,
-                                                           (depth, dist)))
-            tend = engine.config.earthmodel_1d.arrivals((self.startphasestr,
-                                                           (depth, dist)))
-            model_id = engine.config.earthmodel_id
-
-        self.table.add(model_id, (depth, dist), (tstart, tend))
-
-
     def set_trange(self):
         _,_, times = self.table.as_lists()
-        
+
         mintrange = 99999.
         for tstart, tend in times:
             trange = tstart-tend 
@@ -533,126 +560,131 @@ class Chopper():
         '''only needed for method fft'''
         self.tfade = tfade
 
-    def get_tfade(self):
-        return self.tfade
-    
-
-#x_targets = num.array([0,0,0,0,-10,-5,5,10])
-#y_targets = num.array([-10,-5,5,10,0,0,0,0])
-x_targets = num.array([0])
-y_targets = num.array([0])
-x_targets *= km
-y_targets *= km
-
-#100Hz
-#store_ids = ['vogtland_%s'%i for i in [1,2,3]]
-# 50Hz
-#store_ids = ['vogtland_%s'%i for i in [5,6,7]]
-#store_ids = ['vogtland_%s'%i for i in [7, 6]]
-store_ids = ['test', 'test1']
-
-lat = 50.2059
-lon = 12.5152
-depth1 = 8000.
-depth2 = 10000.
-
-sources = []
-targets = [] 
-#for store_id in store_ids:
-target_kwargs = {'elevation': 0,
-                 'codes': ('', 'KVC', '', 'Z'),
-                 'store_id': None}
-
-targets = xy2targets(x_targets, y_targets, lat, lon, **target_kwargs)
-plot_locations(targets)
-
-slopes = [] 
-couples = Couples()
-superdirs = ['/home/marius']
-superdirs.append(os.environ['STORES'])
-#e = LocalEngine(store_superdirs=superdirs)
-chopper = Chopper('first(p|P)', fixed_length=1.5, phase_position=0.4)
-
-store_ids = ['test0', 'test1']
-
-config1 = qseis.QSeisConfigFull.example()
-config1.time_region = [meta.Timing(-10.), meta.Timing(30.)]
-config1.time_window = 40. 
-config1.nsamples = 40/0.5
-config1.earthmodel_id = store_ids[0]
-config1.earthmodel_1d = config1.earthmodel_1d.extract(0, 80000)
-
-config2 = qseis.QSeisConfigFull.example()
-config2.time_region = [meta.Timing(-10.), meta.Timing(30.)]
-config2.time_window = 40. 
-config2.nsamples = 40/0.5
-config2.earthmodel_id = [store_ids[1]]
-config2.earthmodel_1d = config2.earthmodel_1d.extract(0, 80000)
 
 
-configs = [config1, config2]
-on_demand_stores = []
-for i in range(2):
-    on_demand_stores.append(OnDemandStore(config=configs[i],
-                                          store_id=store_ids[i]))
 
-s1 = HaskellSourceWid(lat=float(lat),
-                      lon=float(lon),
-                      depth=depth2,
-                      strike=170.,
-                      dip=80.,
-                      rake=-30.,
-                      magnitude=.5, 
-                      length=40.,
-                      width=25.,
-                      risetime=0.02,
-                      store_id=store_ids[0],
-                      attitude='master')
+if __name__=='__main__':
+    x_targets = num.array([10.])
+    y_targets = num.array([0.])
 
-s2 = HaskellSourceWid(lat=float(lat),
-                      lon=float(lon),
-                      depth=depth2,
-                      strike=170.,
-                      dip=80.,
-                      rake=-30.,
-                      magnitude=.5,
-                      length=40.,
-                      width=25.,
-                      risetime=0.02,
-                      store_id=store_ids[1], 
-                      attitude='slave')
-    
-traces_on_demand = OnDemandEngine(on_demand_stores=on_demand_stores)
-traces_on_demand.process(targets=targets, 
-                         sources=[s1, s2])
-testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets, engine=e)
+    lat = 50.2059
+    lon = 12.5152
+    sdepth = 10000.
+    sampling_rate = 150.
+    time_window = 20
+    noise_level = 0.00001
+    sources = []
+    targets = []
 
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-testcouple = SyntheticCouple(master_slave=[s1, s2], targets=targets,
-                             engine=traces_on_demand)
-#chopper = Chopper('first(s|S)', fixed_length=1.5, phase_position=0.4)
-testcouple.process(chopper=chopper, method='mtspec')
-testcouple.set_fit_function(exp_fit)
-#testcouple.plot()
-fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
 
-slope_ratio = m_slopes/s_slopes
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
+    logger.info('Using %s targets' % (len(targets)))
 
-fig = plt.figure()
-ax = fig.add_subplot(111)
-ax.plot(fx_ma, fy_ma, 'x', label="master")
-ax.plot(fx_sl, fy_sl, 'o', label="slave")
-ax.set_yscale('log')
-ax.set_xscale('log')
-plt.show()
+    slopes = []
+    superdirs = ['/home/marius']
+    superdirs.append(os.environ['STORES'])
 
+    config1 = qseis.QSeisConfigFull.example()
+    config2 = qseis.QSeisConfigFull.example()
+    mod1 = cake.load_model('earthmodel1.nd')
+    mod2 = cake.load_model('earthmodel2.nd')
 
-##couples.append(testcouple)
-#slopes.append(testcouple.get_slopes())
-#
-#compile_slopes(slopes)
+    config1.id='C00'
+    config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+    config1.time_window = time_window
+    config1.nsamples = (sampling_rate*config1.time_window)+1
+    config1.earthmodel_1d = mod1
+    config1.source_mech = source_mech
 
-#x, y = couples.get_average_spectrum()
-# END
-# ------------------------------------------------------------------------------------------
-sys.exit(0)
+    config2.id='C01'
+    config2.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
+    config2.time_window = time_window
+    config2.nsamples = (sampling_rate*config2.time_window)+1
+    config2.earthmodel_1d = mod2
+    config2.source_mech = source_mech
+
+    #on_demand_stores = []
+    #for i in range(len(configs)):
+    #    on_demand_stores.append(OnDemandStore(config=configs[i]))
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    s0 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=sdepth,
+                          strike=170.,
+                          dip=80.,
+                          rake=-30.,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='00',
+                          attitude='master')
+
+    s1 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=sdepth,
+                          strike=170.,
+                          dip=80.,
+                          rake=-30.,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='01',
+                          attitude='slave')
+
+    tracer0 = Tracer(source=s0, target=targets[0], config=config1)
+    tracer1 = Tracer(source=s1, target=targets[0], config=config2)
+
+    #p = multiprocessing.Pool()
+    #p.map(lambda x: x.run, [tracer0, tracer1])
+    tracer0.run(cache_dir='test-cache')
+    tracer1.run(cache_dir='test-cache')
+
+    testcouple = SyntheticCouple(master_slave=[tracer0, tracer1])
+
+    #s_chopper = Chopper('first(s|S)', fixed_length=0.2, phase_position=0.1)
+    p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.1)
+    testcouple.process(chopper=p_chopper,
+                       method='pymutt',
+                       noise_level=noise_level,
+                       repeat=500)
+
+    testcouple.plot()
+    plt.show()
+    #testcouple.process(chopper=p_chopper, method='fft')
+    #testcouple.set_fit_function(exp_fit)
+    #testcouple.plot()
+    fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
+
+    slope_ratio = m_slopes/s_slopes
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.plot(fx_ma, fy_ma, 'x', label="master")
+    ax.plot(fx_sl, fy_sl, 'o', label="slave")
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+
+    ##couples.append(testcouple)
+    #slopes.append(testcouple.get_slopes())
+    #
+    #compile_slopes(slopes)
+
+    #x, y = couples.get_average_spectrum()
+    # END
+    # ------------------------------------------------------------------------------------------
+    sys.exit(0)
