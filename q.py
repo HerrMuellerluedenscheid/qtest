@@ -1,7 +1,7 @@
-import matplotlib
-matplotlib.use('Qt4Agg')
-matplotlib.rc('ytick', labelsize=8) 
-matplotlib.rc('xtick', labelsize=8) 
+import matplotlib as mpl
+mpl.use('Qt4Agg')
+mpl.rc('ytick', labelsize=8) 
+mpl.rc('xtick', labelsize=8) 
 
 import multiprocessing
 
@@ -48,6 +48,10 @@ def _q(freqs, arrivals, slope):
 
     return -num.pi*num.array(freqs)*t/slope 
 
+def getattr_dot(obj, attr):
+    v = reduce(getattr, attr.split('.'), obj)
+    return v
+
 def add_noise(t, level):
     ydata = t.get_ydata()
     noise = num.random.random(len(ydata))-0.5
@@ -66,7 +70,6 @@ def legend_clear_duplicates(ax):
 def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
     targets = []
     for istat, xy in enumerate(zip(x,y)):
-        print istat
         for c in channels:
             lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
             kwargs.update({'lat': float(lat), 'lon': float(lon),
@@ -83,6 +86,8 @@ def ax_if_needed(ax):
 def plot_traces(tr, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
+    ax.set_xlabel('time [s]')
+    ax.set_ylabel('ampl')
 
 def plot_model(mod, ax=None, label='', color=None):
     ax = ax_if_needed(ax)
@@ -90,6 +95,10 @@ def plot_model(mod, ax=None, label='', color=None):
     profile = mod.profile('qp')
     ax.plot(profile, -z, label=label, c=color)
     ax.set_title('Qp')
+
+def infos(ax, info_string):
+    ax.axis('off')
+    ax.text(0., 0, info_string, transform=ax.transAxes)
 
 def plot_locations(items):
     f = plt.figure(figsize=(3,3))
@@ -127,9 +136,9 @@ def compile_slopes(slopes):
         for s, ta, slope_data in slope.iterdd():
             x, y, m, interc = slope_data
             if s.attitude=='master':
-                ax.plot(x,y,'o',alpha=0.5)
+                ax.plot(x,y,'o',alpha=0.2)
             else:
-                ax.plot(x,y,alpha=0.5)
+                ax.plot(x,y,alpha=0.2)
 
     ax.set_yscale("log")
 
@@ -237,7 +246,7 @@ class Spectra(DDContainer):
 
         return slopes
 
-    def plot_all(self, ax=None, colors=None, alpha=1.):
+    def plot_all(self, ax=None, colors=None, alpha=1., legend=True):
         if not ax:
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -247,7 +256,7 @@ class Spectra(DDContainer):
         for tracer, fxfy in self.spectra:
             fx, fy = num.vsplit(fxfy, 2)
             if colors:
-                color = colors[tracer.config.id]
+                color = colors[tracer]
             ax.plot(fx.T, fy.T, label=tracer.config.id, color=color, alpha=alpha)
             #slope = slopes[(s,ta)]
             #print slope[0].shape
@@ -266,7 +275,8 @@ class Spectra(DDContainer):
 #                                horizontalalignment='left', 
 #                                transform=ax.transAxes)
 #
-        ax.legend()
+        #if legend:
+        #    ax.legend()
 
     def plot_all_with_linregress(self):
         fig = plt.figure()
@@ -314,20 +324,37 @@ class Spectra(DDContainer):
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
 
-class UniqueColors():
-    def __init__(self):
-        self.all_colors = "rgbcmyb"
-        self.colors = {}
 
-    def __getitem__(self, key):
-        if not key in self.colors.keys():
-            for c in self.all_colors:
-                if c not in self.colors.values():
-                    self.colors[key] = c
-                    break
-            else:
-                raise Exception('AllColorsInUse')
-        return self.colors[key]
+class TracerColor():
+    def __init__(self, attr, color_map=mpl.cm.jet, tracers=None):
+        self.tracers = tracers
+        self.attr = attr
+        self.color_map = color_map
+        self.min_max = None
+
+        self.set_range()
+
+    def __getitem__(self, tracer):
+        v = getattr_dot(tracer, self.attr)
+        return self.color_map(self.proj(v))
+
+    def proj(self, v):
+        minv, maxv = self.min_max
+        return (v-minv)/(maxv-minv)
+
+    def set_range(self):
+        vals = [getattr_dot(trs, self.attr) for trs in self.tracers]
+        self.min_max = (min(vals), max(vals))
+
+
+class UniqueColor():
+    def __init__(self, color_map=mpl.cm.jet, tracers=None):
+        self.tracers = tracers
+        self.color_map = color_map
+        self.mapping = dict(zip(self.tracers, num.linspace(0, 1, len(self.tracers))))
+
+    def __getitem__(self, tracer):
+        return self.color_map(self.mapping[tracer])
 
 
 class SyntheticCouple():
@@ -337,28 +364,25 @@ class SyntheticCouple():
         self.noisy_spectra = Spectra()
         self.phase_table = None
         self.fit_function = None
-        self.use_trace_index = 2
+        self.use_component = 'z'
         self.colors = None
 
-    def process(self, chopper, method='mtspec', noise_level=0.0, repeat=1):
+    def process(self, chopper, method='mtspec', noise_level=0.0, repeat=1, normalize=False):
         check_method(method)
-        #for i, s in enumerate(self.master_slave):
-        #    t.store_id = s.config.id
-        #    response = self.engine.process(sources=[s.source], targets=[s.target])
-        #    #chopper.update(self.engine, s, t)
-        #    responses.append(response)
-
         for tracer in self.master_slave:
             s = tracer.source
             t = tracer.target
-            tr_raw = tracer.traces[self.use_trace_index]
+            tr_raw = filter(lambda t: t.nslc_id[3]==self.use_component, tracer.traces)[0]
             tracer.processed = chopper.chop(s, t, tr_raw)
+            if normalize:
+                tracer.processed.set_ydata(
+                    tracer.processed.ydata/num.max(num.abs(tracer.processed.ydata)))
             f, a = self.get_spectrum(tracer.processed, method, chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
             for i in xrange(repeat):
-                tr_noise = add_noise(tracer.processed, level=.05)
+                tr_noise = add_noise(tracer.processed, level=noise_level)
                 f, a = self.get_spectrum(tr_noise, method, chopper)
                 fxfy = num.vstack((f,a))
                 self.noisy_spectra.spectra.append((tracer, fxfy))
@@ -387,33 +411,32 @@ class SyntheticCouple():
 
         return f, a
 
-    def plot(self, **kwargs):
-        colors = kwargs.pop('colors', UniqueColors())
+    def plot(self, colors, **kwargs):
         fig = plt.figure()
         ax = fig.add_subplot(2,2,1)
-        self.spectra.plot_all(ax, colors=colors)
-        self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.06)
-        legend_clear_duplicates(ax)
+        self.spectra.plot_all(ax, colors=colors, legend=False)
+        self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.05, legend=False)
+        #legend_clear_duplicates(ax)
         ax = fig.add_subplot(2,2,2)
-        master, slave = self.master_slave 
-        plot_model(mod=master.config.earthmodel_1d,
-                   label=master.config.id,
-                   color=colors[master.config.id],
-                   ax=ax)
+        for tracer in self.master_slave:
+            plot_model(mod=tracer.config.earthmodel_1d,
+                       label=tracer.config.id,
+                       color=colors[tracer],
+                       ax=ax)
 
-        plot_model(mod=slave.config.earthmodel_1d,
-                   label=slave.config.id,
-                   color=colors[slave.config.id],
-                   ax=ax)
-
+        ax.set_xlim((ax.get_xlim()[0]*0.9,
+                     ax.get_xlim()[1]*1.1))
         for tr in self.master_slave:
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
-                       color=colors[tr.config.id])
+                       color=colors[tr])
         ax.legend()
         ax = fig.add_subplot(2, 2, 3)
         for tracer in self.master_slave:
             plot_traces(tr=tracer.processed, ax=ax, label=tr.config.id,
-                        color=colors[tracer.config.id])
+                        color=colors[tracer])
+
+        ax = fig.add_subplot(2, 2, 4)
+        infos(ax, kwargs.pop('infos'))
 
     def set_fit_function(self, func):
         self.spectra.set_fit_function(func)
@@ -450,8 +473,6 @@ class SyntheticCouple():
         assert all(fxfy[0][0]==fxfy[1][0])
         regresses = self.spectra.linregress(1,20)
         slope = regresses[1]/regresses[0]
-        #print 'WARNING: hard coded slope'
-        #slope = 0.3049/0.25
         plt.plot(fxfy[0], _q(fxfy[1], arrivals[::-1], slope=slope))
 
     def _q_1(self, fxfy, A, dists, arrivals):
@@ -500,8 +521,8 @@ class SyntheticCouple():
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
-                 phase_position=0., xfade=0.2):
-        self.phase_pie = PhasePie()
+                 phase_position=0., xfade=0.2, phaser=None):
+        self.phase_pie = phaser or PhasePie()
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
         self.phase_position = phase_position
@@ -520,22 +541,16 @@ class Chopper():
         else:
             raise Exception('Need to define exactly one of endphasestr and fixed length')
         tr_bkp = tr
-        # aufraeumen!
         logger.info('lowpass filter with 0.5/nyquist')
         tr = tr.copy()
         tr.set_location('cp')
-        tr.lowpass(4, 0.5/tr.deltat)
-
         trange = tend-tstart
         tstart -= trange*self.phase_position
         tend -= trange*self.phase_position
-        mark = gui_util.PhaseMarker(tmin=tstart, tmax=tend,
-                                    nslc_ids=[tr.nslc_id])
-        tr.chop(tstart*(1-self.get_xfade()), tend*(1+self.get_xfade()))
+        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
         taperer = trace.CosFader(xfrac=self.get_xfade())
         tr.taper(taperer)
         self.chopped.add(s,t,tr)
-        trace.snuffle([tr, tr_bkp])
         return tr
 
     def get_xfade(self):
@@ -560,19 +575,17 @@ class Chopper():
         '''only needed for method fft'''
         self.tfade = tfade
 
-
-
-
-if __name__=='__main__':
+def noise_test():
     x_targets = num.array([10.])
     y_targets = num.array([0.])
 
     lat = 50.2059
     lon = 12.5152
-    sdepth = 10000.
-    sampling_rate = 150.
-    time_window = 20
-    noise_level = 0.00001
+    source_depth = 15000.
+    sampling_rate = 220.
+    time_window = 15
+    noise_level = 0.02
+    n_repeat = 100
     sources = []
     targets = []
 
@@ -588,14 +601,16 @@ if __name__=='__main__':
     targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
 
-    slopes = []
     superdirs = ['/home/marius']
     superdirs.append(os.environ['STORES'])
 
     config1 = qseis.QSeisConfigFull.example()
     config2 = qseis.QSeisConfigFull.example()
+    config3 = qseis.QSeisConfigFull.example()
+
     mod1 = cake.load_model('earthmodel1.nd')
     mod2 = cake.load_model('earthmodel2.nd')
+    mod3 = cake.load_model('earthmodel3.nd')
 
     config1.id='C00'
     config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
@@ -611,9 +626,12 @@ if __name__=='__main__':
     config2.earthmodel_1d = mod2
     config2.source_mech = source_mech
 
-    #on_demand_stores = []
-    #for i in range(len(configs)):
-    #    on_demand_stores.append(OnDemandStore(config=configs[i]))
+    config3.id='C02'
+    config3.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
+    config3.time_window = time_window
+    config3.nsamples = (sampling_rate*config3.time_window)+1
+    config3.earthmodel_1d = mod3
+    config3.source_mech = source_mech
 
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
@@ -622,10 +640,10 @@ if __name__=='__main__':
 
     s0 = HaskellSourceWid(lat=float(lat),
                           lon=float(lon),
-                          depth=sdepth,
-                          strike=170.,
-                          dip=80.,
-                          rake=-30.,
+                          depth=source_depth,
+                          strike=strike,
+                          dip=dip,
+                          rake=rake,
                           magnitude=.5,
                           length=0.,
                           width=0.,
@@ -633,58 +651,150 @@ if __name__=='__main__':
                           id='00',
                           attitude='master')
 
-    s1 = HaskellSourceWid(lat=float(lat),
-                          lon=float(lon),
-                          depth=sdepth,
-                          strike=170.,
-                          dip=80.,
-                          rake=-30.,
-                          magnitude=.5,
-                          length=0.,
-                          width=0.,
-                          risetime=0.02,
-                          id='01',
-                          attitude='slave')
-
     tracer0 = Tracer(source=s0, target=targets[0], config=config1)
-    tracer1 = Tracer(source=s1, target=targets[0], config=config2)
+    tracer1 = Tracer(source=s0, target=targets[0], config=config2)
+    tracer2 = Tracer(source=s0, target=targets[0], config=config3)
 
-    #p = multiprocessing.Pool()
-    #p.map(lambda x: x.run, [tracer0, tracer1])
-    tracer0.run(cache_dir='test-cache')
-    tracer1.run(cache_dir='test-cache')
+    tracers = [tracer0, tracer1, tracer2]
+    for tr in tracers:
+        tr.run(cache_dir='test-cache')
 
-    testcouple = SyntheticCouple(master_slave=[tracer0, tracer1])
+    testcouple = SyntheticCouple(master_slave=tracers)
 
-    #s_chopper = Chopper('first(s|S)', fixed_length=0.2, phase_position=0.1)
-    p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.1)
+    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
+                        phaser=PhasePie(mod=mod1))
     testcouple.process(chopper=p_chopper,
                        method='pymutt',
                        noise_level=noise_level,
-                       repeat=500)
+                       repeat=n_repeat)
 
-    testcouple.plot()
+    infos = '''Strike: %s
+    Dip: %s
+    Rake: %s
+    Sampling rate [Hz]: %s
+    dist_x: %s
+    dist_y: %s
+    noise_level: %s
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level)
+    colors = UniqueColor(tracers=tracers)
+    testcouple.plot(infos=infos, colors=colors)
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
     plt.show()
-    #testcouple.process(chopper=p_chopper, method='fft')
-    #testcouple.set_fit_function(exp_fit)
-    #testcouple.plot()
-    fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
+    #fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
 
-    slope_ratio = m_slopes/s_slopes
+    #slope_ratio = m_slopes/s_slopes
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(fx_ma, fy_ma, 'x', label="master")
-    ax.plot(fx_sl, fy_sl, 'o', label="slave")
-    ax.set_yscale('log')
-    ax.set_xscale('log')
+    #fig = plt.figure()
+    #ax = fig.add_subplot(111)
+    #ax.plot(fx_ma, fy_ma, 'x', label="master")
+    #ax.plot(fx_sl, fy_sl, 'o', label="slave")
+    #ax.set_yscale('log')
+    #ax.set_xscale('log')
 
-    ##couples.append(testcouple)
-    #slopes.append(testcouple.get_slopes())
-    #
-    #compile_slopes(slopes)
+def sdr_test():
 
-    #x, y = couples.get_average_spectrum()
-    # END
-    # ------------------------------------------------------------------------------------------
+    x_targets = num.array([10.])
+    y_targets = num.array([0.])
+
+    lat = 50.2059
+    lon = 12.5152
+    source_depth = 15000.
+    sampling_rate = 220.
+    time_window = 15
+    noise_level = 0.02
+    n_repeat = 100
+    sources = []
+    targets = []
+
+    strike = 170.
+    dips = num.arange(0, 90, 10)
+    rake = -30.
+    source_mechs = [qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake) 
+                    for dip in dips]
+
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
+
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
+    logger.info('Using %s targets' % (len(targets)))
+
+    superdirs = ['/home/marius']
+    superdirs.append(os.environ['STORES'])
+    tracers = []
+    for i_source_mech, source_mech in enumerate(source_mechs):
+        config1 = qseis.QSeisConfigFull.example()
+        mod1 = cake.load_model('earthmodel1.nd')
+
+        config1.id='C%s' % i_source_mech
+        config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config1.time_window = time_window
+        config1.nsamples = (sampling_rate*config1.time_window)+1
+        config1.earthmodel_1d = mod1
+        config1.source_mech = source_mech
+
+        s0 = HaskellSourceWid(lat=float(lat),
+                              lon=float(lon),
+                              depth=source_depth,
+                              strike=strike,
+                              dip=dip,
+                              rake=rake,
+                              magnitude=.5,
+                              length=0.,
+                              width=0.,
+                              risetime=0.02,
+                              id='%s' % i_source_mech,
+                              attitude='master')
+        tracer0 = Tracer(source=s0,
+                         target=targets[0],
+                         config=config1,
+                         normalize=True)
+        tracers.append(tracer0)
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    for tracer in tracers:
+        tracer.run(cache_dir='test-cache')
+
+    testcouple = SyntheticCouple(master_slave=tracers)
+
+    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
+                        phaser=PhasePie(mod=mod1))
+    testcouple.process(chopper=p_chopper,
+                       method='pymutt',
+                       noise_level=noise_level,
+                       repeat=n_repeat,
+                       normalize=True)
+
+    infos = '''Strike: %s
+    Dip: %s
+    Rake: %s
+    Sampling rate [Hz]: %s
+    dist_x: %s
+    dist_y: %s
+    noise_level: %s
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level)
+    colors = TracerColor(attr='config.source_mech.dip', tracers=tracers)
+    testcouple.plot(infos=infos, colors=colors)
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
+    plt.show()
+    #fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
+
+    #slope_ratio = m_slopes/s_slopes
+
+    #fig = plt.figure()
+    #ax = fig.add_subplot(111)
+    #ax.plot(fx_ma, fy_ma, 'x', label="master")
+    #ax.plot(fx_sl, fy_sl, 'o', label="slave")
+    #ax.set_yscale('log')
+    #ax.set_xscale('log')
+
+if __name__=='__main__':
+    noise_test()
+    sdr_test()
     sys.exit(0)

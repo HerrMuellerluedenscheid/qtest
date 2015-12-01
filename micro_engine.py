@@ -15,6 +15,8 @@ import multiprocessing
 
 pjoin = os.path.join
 
+logger = logging.getLogger()
+
 
 class Tracer():
     def __init__(self, source, target, *args, **kwargs):
@@ -25,10 +27,11 @@ class Tracer():
         self.phases = PhasePie(mod=self.config.earthmodel_1d)
         self.traces = None
         self.processed = None
+        self.kwargs = kwargs
 
         self.config.receiver_distances = [source.distance_to(target)/1000.]
         self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
-        self.config.source_depths = [source.depth/1000.]
+        self.config.source_depth = source.depth/1000.
         self.config.id+= "_%s" % (self.source.id)
 
     def run(self, cache_dir=False):
@@ -38,20 +41,23 @@ class Tracer():
             subdirs = os.listdir(cache_dir)
             for sdir in subdirs:
                 config = guts.load(filename=pjoin(cache_dir, sdir, configfn))
-                print str(config)
-                print 'asdfasdf'
+                self.config.regularize()
                 if str(config)==str(self.config):
-                    print 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-                    self.traces = io.load(fn)
+                    self.traces = io.load(pjoin(cache_dir, sdir, fn))
                     return
 
         runner = qseis.QSeisRunner()
         runner.run(config=self.config)
         self.traces = runner.get_traces()
-        if cache_dir:
+
+
+        if not self.traces:
+            logger.warn('no traces returned')
+        if cache_dir and self.traces:
             tmpdir = tempfile.mkdtemp(dir=cache_dir)
             self.config.dump(filename=pjoin(tmpdir, configfn))
             io.save(self.traces, pjoin(tmpdir, fn))
+            logger.info('cached under: %s' % cache_dir)
 
     def set_geometry(self, distances, azimuths, depths):
         self.config.receiver_distances = distances
@@ -60,6 +66,7 @@ class Tracer():
 
     def set_config(self, config):
         self.config = config
+
 
 class OnDemandEngine():
     def __init__(self, *args, **kwargs):
