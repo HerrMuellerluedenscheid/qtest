@@ -4,7 +4,7 @@ mpl.rc('ytick', labelsize=8)
 mpl.rc('xtick', labelsize=8) 
 
 import multiprocessing
-
+import copy
 from pyrocko.gf import meta, DCSource, RectangularSource, Target
 from pyrocko.guts import *
 from pyrocko import gui_util
@@ -13,6 +13,7 @@ from pyrocko import trace
 from pyrocko import cake
 from pyrocko import crust2x2
 from pyrocko.fomosto import qseis
+from pyrocko.parimap import parimap
 
 from collections import defaultdict
 from scipy.stats import linregress
@@ -21,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
-from micro_engine import OnDemandEngine, Tracer, create_store
+from micro_engine import OnDemandEngine, Tracer, create_store, Builder
 from autogain.autogain import PhasePie
 import logging 
 logging.basicConfig(level=logging.INFO)
@@ -89,12 +90,12 @@ def plot_traces(tr, ax=None, label='', color='r'):
     ax.set_xlabel('time [s]')
     ax.set_ylabel('ampl')
 
-def plot_model(mod, ax=None, label='', color=None):
+def plot_model(mod, ax=None, label='', color=None, parameter='qp'):
     ax = ax_if_needed(ax)
     z = mod.profile('z')
-    profile = mod.profile('qp')
+    profile = mod.profile(parameter)
     ax.plot(profile, -z, label=label, c=color)
-    ax.set_title('Qp')
+    ax.set_title(parameter)
 
 def infos(ax, info_string):
     ax.axis('off')
@@ -326,7 +327,7 @@ class Spectra(DDContainer):
 
 
 class TracerColor():
-    def __init__(self, attr, color_map=mpl.cm.jet, tracers=None):
+    def __init__(self, attr, color_map=mpl.cm.coolwarm, tracers=None):
         self.tracers = tracers
         self.attr = attr
         self.color_map = color_map
@@ -348,7 +349,7 @@ class TracerColor():
 
 
 class UniqueColor():
-    def __init__(self, color_map=mpl.cm.jet, tracers=None):
+    def __init__(self, color_map=mpl.cm.coolwarm, tracers=None):
         self.tracers = tracers
         self.color_map = color_map
         self.mapping = dict(zip(self.tracers, num.linspace(0, 1, len(self.tracers))))
@@ -367,23 +368,17 @@ class SyntheticCouple():
         self.use_component = 'z'
         self.colors = None
 
-    def process(self, chopper, method='mtspec', noise_level=0.0, repeat=1, normalize=False):
+    def process(self, method='mtspec', noise_level=0.0, repeat=1, **pp_kwargs):
         check_method(method)
         for tracer in self.master_slave:
-            s = tracer.source
-            t = tracer.target
-            tr_raw = filter(lambda t: t.nslc_id[3]==self.use_component, tracer.traces)[0]
-            tracer.processed = chopper.chop(s, t, tr_raw)
-            if normalize:
-                tracer.processed.set_ydata(
-                    tracer.processed.ydata/num.max(num.abs(tracer.processed.ydata)))
-            f, a = self.get_spectrum(tracer.processed, method, chopper)
+            tr = tracer.process(self.use_component, **pp_kwargs)
+            f, a = self.get_spectrum(tr, method, tracer.chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
             for i in xrange(repeat):
-                tr_noise = add_noise(tracer.processed, level=noise_level)
-                f, a = self.get_spectrum(tr_noise, method, chopper)
+                tr_noise = add_noise(tracer.process(self.use_component, **pp_kwargs), level=noise_level)
+                f, a = self.get_spectrum(tr_noise, method, tracer.chopper)
                 fxfy = num.vstack((f,a))
                 self.noisy_spectra.spectra.append((tracer, fxfy))
 
@@ -422,7 +417,8 @@ class SyntheticCouple():
             plot_model(mod=tracer.config.earthmodel_1d,
                        label=tracer.config.id,
                        color=colors[tracer],
-                       ax=ax)
+                       ax=ax,
+                       parameter=kwargs.get('parameter', 'qp'))
 
         ax.set_xlim((ax.get_xlim()[0]*0.9,
                      ax.get_xlim()[1]*1.1))
@@ -432,7 +428,9 @@ class SyntheticCouple():
         ax.legend()
         ax = fig.add_subplot(2, 2, 3)
         for tracer in self.master_slave:
-            plot_traces(tr=tracer.processed, ax=ax, label=tr.config.id,
+            plot_traces(tr=tracer.process(
+                self.use_component, normalize=kwargs.get('normalize', False)),
+                        ax=ax, label=tr.config.id,
                         color=colors[tracer])
 
         ax = fig.add_subplot(2, 2, 4)
@@ -576,14 +574,15 @@ class Chopper():
         self.tfade = tfade
 
 def noise_test():
+    builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
     y_targets = num.array([0.])
 
     lat = 50.2059
     lon = 12.5152
-    source_depth = 15000.
-    sampling_rate = 220.
-    time_window = 15
+    source_depth = 12000.
+    sampling_rate = 20
+    time_window = 14
     noise_level = 0.02
     n_repeat = 100
     sources = []
@@ -633,6 +632,7 @@ def noise_test():
     config3.earthmodel_1d = mod3
     config3.source_mech = source_mech
 
+    configs = [config1, config2, config3]
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
@@ -650,21 +650,15 @@ def noise_test():
                           risetime=0.02,
                           id='00',
                           attitude='master')
+    p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
+                        phaser=PhasePie(mod=mod1))
 
-    tracer0 = Tracer(source=s0, target=targets[0], config=config1)
-    tracer1 = Tracer(source=s0, target=targets[0], config=config2)
-    tracer2 = Tracer(source=s0, target=targets[0], config=config3)
-
-    tracers = [tracer0, tracer1, tracer2]
-    for tr in tracers:
-        tr.run(cache_dir='test-cache')
+    tracers = [Tracer(s0, targets[0], p_chopper, config=conf) for conf in configs]
+    tracers = builder.build(tracers)
 
     testcouple = SyntheticCouple(master_slave=tracers)
 
-    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
-                        phaser=PhasePie(mod=mod1))
-    testcouple.process(chopper=p_chopper,
-                       method='pymutt',
+    testcouple.process(method='pymutt',
                        noise_level=noise_level,
                        repeat=n_repeat)
 
@@ -674,8 +668,9 @@ def noise_test():
     Sampling rate [Hz]: %s
     dist_x: %s
     dist_y: %s
+    source_depth: %s
     noise_level: %s
-    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level)
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level)
     colors = UniqueColor(tracers=tracers)
     testcouple.plot(infos=infos, colors=colors)
     outfn = 'testimage'
@@ -700,7 +695,7 @@ def sdr_test():
     lat = 50.2059
     lon = 12.5152
     source_depth = 15000.
-    sampling_rate = 220.
+    sampling_rate = 500
     time_window = 15
     noise_level = 0.02
     n_repeat = 100
@@ -723,9 +718,11 @@ def sdr_test():
     superdirs = ['/home/marius']
     superdirs.append(os.environ['STORES'])
     tracers = []
+    mod1 = cake.load_model('earthmodel1.nd')
+    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
+                        phaser=PhasePie(mod=mod1))
     for i_source_mech, source_mech in enumerate(source_mechs):
         config1 = qseis.QSeisConfigFull.example()
-        mod1 = cake.load_model('earthmodel1.nd')
 
         config1.id='C%s' % i_source_mech
         config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
@@ -749,6 +746,7 @@ def sdr_test():
         tracer0 = Tracer(source=s0,
                          target=targets[0],
                          config=config1,
+                         chopper=p_chopper,
                          normalize=True)
         tracers.append(tracer0)
 
@@ -762,10 +760,7 @@ def sdr_test():
 
     testcouple = SyntheticCouple(master_slave=tracers)
 
-    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
-                        phaser=PhasePie(mod=mod1))
-    testcouple.process(chopper=p_chopper,
-                       method='pymutt',
+    testcouple.process( method='pymutt',
                        noise_level=noise_level,
                        repeat=n_repeat,
                        normalize=True)
@@ -776,25 +771,130 @@ def sdr_test():
     Sampling rate [Hz]: %s
     dist_x: %s
     dist_y: %s
+    source_depth: %s
     noise_level: %s
-    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level)
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level)
     colors = TracerColor(attr='config.source_mech.dip', tracers=tracers)
     testcouple.plot(infos=infos, colors=colors)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
     plt.show()
-    #fx_ma, fy_ma, fx_sl, fy_sl = testcouple.get_average_spectra()
 
-    #slope_ratio = m_slopes/s_slopes
+def vp_model_test():
+    '''
+    Eigentlich muesste der Chopper angepasst werden, damit phase in der Mitte
+    bleibt. Aber mit normal noise sollte es egal sein, ob noise vor oder hinter
+    dem Onset ist.'''
+    x_targets = num.array([10.])
+    y_targets = num.array([0.])
 
-    #fig = plt.figure()
-    #ax = fig.add_subplot(111)
-    #ax.plot(fx_ma, fy_ma, 'x', label="master")
-    #ax.plot(fx_sl, fy_sl, 'o', label="slave")
-    #ax.set_yscale('log')
-    #ax.set_xscale('log')
+    lat = 50.2059
+    lon = 12.5152
+    source_depth = 15000.
+    sampling_rate = 500
+    time_window = 15
+    noise_level = 0.02
+    n_repeat = 0
+    sources = []
+    targets = []
+
+    strike = 170.
+    dip = 70
+    rake = -30.
+    mod = cake.load_model('earthmodel1.nd')
+
+    v_perturb_perc = num.arange(-2, 2.2, 0.2)
+    models = []
+    for i_pert, pert in enumerate(v_perturb_perc):
+        print pert
+        new_mod = cake.LayeredModel()
+        for layer in mod.layers():
+            if isinstance(layer, cake.HomogeneousLayer):
+                layer = copy.deepcopy(layer)
+                layer.m.vp *= (100.+pert)/100.
+            else:
+                raise Exception('Not a HomogeneousLayer')
+            new_mod.append(layer)
+        models.append(new_mod)
+
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
+
+    strike = 170.
+    dips = num.arange(0, 90, 10)
+    rake = -30.
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
+    logger.info('Using %s targets' % (len(targets)))
+
+    superdirs = ['/home/marius']
+    superdirs.append(os.environ['STORES'])
+    tracers = []
+    s0 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=source_depth,
+                          strike=strike,
+                          dip=dip,
+                          rake=rake,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='std',
+                          attitude='master')
+
+    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
+                        phaser=PhasePie(mod=mod))
+
+    for i_model, mod in enumerate(models):
+        print mod
+        config = qseis.QSeisConfigFull.example()
+        config.id='C%s' % i_model
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_window = time_window
+        config.nsamples = (sampling_rate*config.time_window)+1
+        config.earthmodel_1d = mod
+        config.source_mech = source_mech
+        tracer0 = Tracer(s0, targets[0],
+                         chopper=p_chopper,
+                         config=config,
+                         normalize=True)
+        tracers.append(tracer0)
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    for tracer in tracers:
+        tracer.run(cache_dir='test-cache')
+
+    testcouple = SyntheticCouple(master_slave=tracers)
+    testcouple.process(method='pymutt',
+                       noise_level=noise_level,
+                       repeat=n_repeat,
+                       normalize=True)
+
+    infos = '''Strike: %s
+    Dip: %s
+    Rake: %s
+    Sampling rate [Hz]: %s
+    dist_x: %s
+    dist_y: %s
+    source_depth: %s
+    noise_level: %s
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level)
+    #colors = TracerColor(attr='config.id', tracers=tracers)
+    colors = UniqueColor(tracers=tracers)
+    testcouple.plot(infos=infos, colors=colors, parameter='vp')
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
+    plt.show()
 
 if __name__=='__main__':
     noise_test()
     sdr_test()
+    vp_model_test()
     sys.exit(0)

@@ -1,6 +1,7 @@
 import numpy as num
 import os
 import tempfile
+import glob
 from autogain.autogain import PhasePie
 from pyrocko.fomosto import qseis
 from pyrocko import trace
@@ -8,6 +9,7 @@ from pyrocko import guts
 from pyrocko import io
 from pyrocko.gf import meta, Engine, Target, DCSource
 from pyrocko.gf.store import Store
+from pyrocko.parimap import parimap
 import time
 import argparse
 import logging
@@ -17,16 +19,83 @@ pjoin = os.path.join
 
 logger = logging.getLogger()
 
+class Builder:
+    def __init__(self, cache_dir=False):
+        self.runners = []
+        self.cache_dir = cache_dir
 
-class Tracer():
-    def __init__(self, source, target, *args, **kwargs):
+    def build(self, tracers):
+        ready = []
+        need_work = []
+        for tr in tracers:
+            found_cache = self.cache(tr, load=True, cache_dir=self.cache_dir)
+            if not found_cache:
+                need_work.append(tr)
+            else:
+                ready.append(tr)
+
+        for tr, runner in parimap(self.work, need_work):
+            tmpdir = runner.tempdir
+
+            traces = self.load_seis(tmpdir)
+            tr.traces = traces
+            ready.append(tr)
+            del(runner)
+            tr.snuffle()
+
+        return ready
+
+    def work(self, tr):
+        runner = qseis.QSeisRunner(keep_tmp=True)
+        runner.run(config=tr.config)
+        return tr, runner
+
+    def cache(self, tr, load, cache_dir=False):
+        configfn='qseis-config.yaml'
+        fn = 'traces.mseed'
+        found_cache = False
+        if cache_dir and load:
+            subdirs = os.listdir(cache_dir)
+            for sdir in subdirs:
+                config = guts.load(filename=pjoin(cache_dir, sdir, configfn))
+                tr.config.regularize()
+                if str(config)==str(tr.config):
+                    tr.read_files(pjoin(cache_dir, sdir, fn))
+                    found_cache = True
+
+        elif cache_dir and not load:
+            tmpdir = tempfile.mkdtemp(dir=cache_dir)
+            self.config.dump(filename=pjoin(tmpdir, configfn))
+            io.save(self.traces, pjoin(tmpdir, fn))
+            logger.info('cached under: %s' % cache_dir)
+        return found_cache
+
+    def load_seis(self, directory):
+        # Hier mussen die files seis.tr, seis.... etc. aus der qseis temp directory 
+        # geladen werden und wieder in den tracer gefuettert werden.
+        fns = glob.glob(pjoin(directory, 'seis.*'))
+        traces = []
+        for fn in fns:
+            data = num.loadtxt(fn, skiprows=1).T
+            tmin=min(data[0])
+            tmax=max(data[0])
+            print tmin, tmax
+            trc = trace.Trace(ydata=data[1], tmin=min(data[0]), tmax=max(data[0]), 
+                        channel=fn.split('.')[-1][-1])
+            traces.append(trc)
+        return traces
+
+
+class Tracer:
+    def __init__(self, source, target, chopper, *args, **kwargs):
         self.runner = None
         self.source = source
         self.target = target
         self.config = kwargs.pop('config', None)
         self.phases = PhasePie(mod=self.config.earthmodel_1d)
         self.traces = None
-        self.processed = None
+        self.processed_cache = {}
+        self.chopper = chopper
         self.kwargs = kwargs
 
         self.config.receiver_distances = [source.distance_to(target)/1000.]
@@ -34,30 +103,26 @@ class Tracer():
         self.config.source_depth = source.depth/1000.
         self.config.id+= "_%s" % (self.source.id)
 
-    def run(self, cache_dir=False):
-        configfn='qseis-config.yaml'
-        fn = 'traces.mseed'
-        if cache_dir:
-            subdirs = os.listdir(cache_dir)
-            for sdir in subdirs:
-                config = guts.load(filename=pjoin(cache_dir, sdir, configfn))
-                self.config.regularize()
-                if str(config)==str(self.config):
-                    self.traces = io.load(pjoin(cache_dir, sdir, fn))
-                    return
+    def read_files(self, dir):
+        self.traces = io.load(dir)
 
-        runner = qseis.QSeisRunner()
-        runner.run(config=self.config)
-        self.traces = runner.get_traces()
+    def process(self, component, **pp_kwargs):
+        tr = self.processed_cache.get(component, False)
+        if not tr:
+            tr_raw = self.filter_by_component(component).copy()
+            tr = self.chopper.chop(
+                self.source, self.target, tr_raw)
+            self.processed_cache[component] = tr
+        return self.post_process(tr, **pp_kwargs)
 
+    def post_process(self, tr, normalize=False):
+        if normalize:
+            tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
+        return tr
 
-        if not self.traces:
-            logger.warn('no traces returned')
-        if cache_dir and self.traces:
-            tmpdir = tempfile.mkdtemp(dir=cache_dir)
-            self.config.dump(filename=pjoin(tmpdir, configfn))
-            io.save(self.traces, pjoin(tmpdir, fn))
-            logger.info('cached under: %s' % cache_dir)
+    def filter_by_component(self, component):
+        tr = filter(lambda t: t.nslc_id[3]==component, self.traces)[0]
+        return tr
 
     def set_geometry(self, distances, azimuths, depths):
         self.config.receiver_distances = distances
@@ -66,6 +131,9 @@ class Tracer():
 
     def set_config(self, config):
         self.config = config
+
+    def snuffle(self):
+        trace.snuffle(self.traces)
 
 
 class OnDemandEngine():
