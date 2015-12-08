@@ -28,7 +28,7 @@ class Builder:
         ready = []
         need_work = []
         for tr in tracers:
-            found_cache = self.cache(tr, load=True, cache_dir=self.cache_dir)
+            found_cache = self.cache(tr, load=True)
             if not found_cache:
                 need_work.append(tr)
             else:
@@ -36,12 +36,15 @@ class Builder:
 
         for tr, runner in parimap(self.work, need_work):
             tmpdir = runner.tempdir
+            tmin = tr.config.time_start
+            tmax = tr.config.time_window+tmin
 
-            traces = self.load_seis(tmpdir)
+            traces = self.load_seis(tmpdir, tmin=tmin, tmax=tmax)
             tr.traces = traces
             ready.append(tr)
+            if self.cache_dir:
+                self.cache(tr, load=False)
             del(runner)
-            tr.snuffle()
 
         return ready
 
@@ -50,39 +53,39 @@ class Builder:
         runner.run(config=tr.config)
         return tr, runner
 
-    def cache(self, tr, load, cache_dir=False):
+    def cache(self, tr, load):
         configfn='qseis-config.yaml'
         fn = 'traces.mseed'
         found_cache = False
-        if cache_dir and load:
-            subdirs = os.listdir(cache_dir)
+        if self.cache_dir and load:
+            subdirs = os.listdir(self.cache_dir)
             for sdir in subdirs:
-                config = guts.load(filename=pjoin(cache_dir, sdir, configfn))
+                config = guts.load(filename=pjoin(self.cache_dir, sdir, configfn))
                 tr.config.regularize()
                 if str(config)==str(tr.config):
-                    tr.read_files(pjoin(cache_dir, sdir, fn))
+                    tr.read_files(pjoin(self.cache_dir, sdir, fn))
                     found_cache = True
 
-        elif cache_dir and not load:
-            tmpdir = tempfile.mkdtemp(dir=cache_dir)
-            self.config.dump(filename=pjoin(tmpdir, configfn))
-            io.save(self.traces, pjoin(tmpdir, fn))
-            logger.info('cached under: %s' % cache_dir)
+        elif self.cache_dir and not load:
+            tmpdir = tempfile.mkdtemp(dir=self.cache_dir)
+            tr.config.dump(filename=pjoin(tmpdir, configfn))
+            io.save(tr.traces, pjoin(tmpdir, fn))
+            logger.info('cached under: %s' % self.cache_dir)
         return found_cache
 
-    def load_seis(self, directory):
+    def load_seis(self, directory, tmin, tmax):
         # Hier mussen die files seis.tr, seis.... etc. aus der qseis temp directory 
         # geladen werden und wieder in den tracer gefuettert werden.
         fns = glob.glob(pjoin(directory, 'seis.*'))
         traces = []
         for fn in fns:
             data = num.loadtxt(fn, skiprows=1).T
-            tmin=min(data[0])
-            tmax=max(data[0])
-            print tmin, tmax
-            trc = trace.Trace(ydata=data[1], tmin=min(data[0]), tmax=max(data[0]), 
-                        channel=fn.split('.')[-1][-1])
+            dt = (tmax-tmin)/(len(data[1])-1)
+            trc = trace.Trace(
+                ydata=data[1], tmin=tmin, deltat=dt, channel=fn.split('.')[-1][-1])
             traces.append(trc)
+        trace.snuffle(traces)
+
         return traces
 
 

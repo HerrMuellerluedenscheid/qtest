@@ -84,6 +84,12 @@ def ax_if_needed(ax):
         ax = fig.add_subplot(111)
     return ax
 
+def regression(tr, method, fmin=0., fmax=9999, chopper=None):
+    fx, fy = spectralize(tr, method=method, chopper=chopper)
+    indx = num.where(num.logical_and(fx>=fmin, fx<=fmax))
+    #slope, interc, r_value, p_value, stderr = linregress(fx, num.log(num.abs(fy)))
+    return linregress(fx, num.log(num.abs(fy)))
+
 def plot_traces(tr, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
@@ -226,24 +232,47 @@ def linear_fit(x, y, m):
 def exp_fit(x, y, m):
     return num.exp(y - m*x)
 
+def spectralize(tr, method, chopper=None):
+    if method=='fft':
+        # fuehrt zum amplitudenspektrum
+        f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
+
+    elif method=='pymutt':
+        # berechnet die power spectral density
+        r = pymutt.mtft(tr.ydata, dt=tr.deltat)
+        f = num.arange(r['nspec'])*r['df']
+        a = r['power']
+
+    elif method=='mtspec':
+        # nfft -> zero padding
+        a, f = mtspec(data=tr.ydata,
+                      delta=tr.deltat,
+                      number_of_tapers=10,
+                      time_bandwidth=1.2,
+                      nfft=2**9,
+                      statistics=False)
+
+    return f, a
+
 class Spectra(DDContainer):
     def __init__(self, *args, **kwargs):
         DDContainer.__init__(self, args, kwargs)
-        self.fit_function = None
+        self.fit_function = exp_fit
         self.spectra = []
 
     def set_fit_function(self, func):
         self.fit_function = func
 
     def get_slopes(self):
-        slopes = DDContainer()
-        for s, ta, fxfy in self.iterdd():
+        slopes = []
+        for tracer, fxfy in self.spectra:
             fx, fy = num.vsplit(fxfy, 2)
-            fc = 1./(0.5*s.risetime)
-            slope_section = extract(fxfy, upper_lim=fc, lower_lim=22)
-            popt, pcov = curve_fit( self.fit_function, *slope_section)
+            #fc = 1./(0.5*s.risetime)
+            fc = 50.
+            slope_section = extract(fxfy, upper_lim=fc, lower_lim=230.)
+            popt, pcov = curve_fit(self.fit_function, *slope_section)
             fy_fit = self.fit_function(slope_section[0], popt[0], popt[1]),
-            slopes.add(s, ta, [slope_section[0], num.array(fy_fit).T, popt[0], popt[1]])
+            slopes.append((tracer, (slope_section[0], num.array(fy_fit).T, popt[0], popt[1])))
 
         return slopes
 
@@ -252,32 +281,14 @@ class Spectra(DDContainer):
             fig = plt.figure()
             ax = fig.add_subplot(111)
         count = 0
-        #slopes = self.get_slopes()
-        #for s, ta, fxfy in self.iterdd():
         for tracer, fxfy in self.spectra:
             fx, fy = num.vsplit(fxfy, 2)
             if colors:
                 color = colors[tracer]
             ax.plot(fx.T, fy.T, label=tracer.config.id, color=color, alpha=alpha)
-            #slope = slopes[(s,ta)]
-            #print slope[0].shape
-            #print slope[1].shape
-            #ax.plot(slope[0], slope[1], 'o', label=s.store_id, color=color)
-            #slopes.append(popt[0])
             count += 1
         ax.autoscale()
         ax.set_yscale("log")
-        # slopes hat jetzt 4 eintraege. von interesse: 3 
-        slope_string = ''
-        #for s, ta, slope_data in slopes.iterdd():
-        #    print slopes
-        #    slope_string += '%s\n'%slope_data[2]
-#        ax.text(0.1,0.9,slope_string, verticalalignment='top',
-#                                horizontalalignment='left', 
-#                                transform=ax.transAxes)
-#
-        #if legend:
-        #    ax.legend()
 
     def plot_all_with_linregress(self):
         fig = plt.figure()
@@ -368,7 +379,12 @@ class SyntheticCouple():
         self.use_component = 'z'
         self.colors = None
 
-    def process(self, method='mtspec', noise_level=0.0, repeat=1, **pp_kwargs):
+        self.repeat = 1
+        self.noise_level = 0
+
+    def process(self, method='mtspec', **pp_kwargs):
+        self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
+        self.repeat = pp_kwargs.pop('repeat', self.repeat)
         check_method(method)
         for tracer in self.master_slave:
             tr = tracer.process(self.use_component, **pp_kwargs)
@@ -376,43 +392,24 @@ class SyntheticCouple():
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
-            for i in xrange(repeat):
-                tr_noise = add_noise(tracer.process(self.use_component, **pp_kwargs), level=noise_level)
+            for i in xrange(self.repeat):
+                tr = tracer.process(self.use_component, **pp_kwargs).copy()
+                tr_noise = add_noise(tr, level=self.noise_level)
                 f, a = self.get_spectrum(tr_noise, method, tracer.chopper)
                 fxfy = num.vstack((f,a))
                 self.noisy_spectra.spectra.append((tracer, fxfy))
 
 
     def get_spectrum(self, tr, method, chopper):
-        if method=='fft':
-            # fuehrt zum amplitudenspektrum
-            f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
-
-        elif method=='pymutt':
-            # berechnet die power spectral density
-            r = pymutt.mtft(tr.ydata, dt=tr.deltat)
-            f = num.arange(r['nspec'])*r['df']
-            a = r['power']
-
-        elif method=='mtspec':
-            # nfft -> zero padding
-            a, f = mtspec(data=tr.ydata,
-                          delta=tr.deltat,
-                          number_of_tapers=10,
-                          time_bandwidth=1.2,
-                          nfft=2**9,
-                          #nfft=250,
-                          statistics=False)
-
-        return f, a
+        return spectralize(tr, method, chopper)
 
     def plot(self, colors, **kwargs):
-        fig = plt.figure()
-        ax = fig.add_subplot(2,2,1)
+        fig = plt.figure(figsize=(5, 6))
+        ax = fig.add_subplot(3, 2, 1)
         self.spectra.plot_all(ax, colors=colors, legend=False)
         self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.05, legend=False)
         #legend_clear_duplicates(ax)
-        ax = fig.add_subplot(2,2,2)
+        ax = fig.add_subplot(3, 2, 2)
         for tracer in self.master_slave:
             plot_model(mod=tracer.config.earthmodel_1d,
                        label=tracer.config.id,
@@ -425,29 +422,26 @@ class SyntheticCouple():
         for tr in self.master_slave:
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
                        color=colors[tr])
-        ax.legend()
-        ax = fig.add_subplot(2, 2, 3)
+        if not kwargs.get('no_legend', False):
+            ax.legend()
+        ax = fig.add_subplot(3, 2, 3)
         for tracer in self.master_slave:
             plot_traces(tr=tracer.process(
                 self.use_component, normalize=kwargs.get('normalize', False)),
                         ax=ax, label=tr.config.id,
                         color=colors[tracer])
 
-        ax = fig.add_subplot(2, 2, 4)
+        if self.noise_level!=0.:
+            trs = tracer.process(self.use_component, normalize=kwargs.get('normalize', False)).copy()
+            trs = add_noise(trs, level=self.noise_level)
+            plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
+
+        ax = fig.add_subplot(3, 2, 4)
         infos(ax, kwargs.pop('infos'))
 
     def set_fit_function(self, func):
         self.spectra.set_fit_function(func)
         self.fit_function = func
-
-    def slope(self, phasestr):
-        f_corner = 3
-        for s,ta, fit in self.spectra.linefit(self.fit_function):
-            print fit
-        #regressions = self.spectra.linregress(fmin=f_corner)
-        #slopes = []
-        #for s, ta, regress in regressions.iterdd():
-        #    slopes.append(regresses)
 
     def get_slopes(self):
         return self.spectra.get_slopes()
@@ -519,7 +513,7 @@ class SyntheticCouple():
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
-                 phase_position=0., xfade=0.2, phaser=None):
+                 phase_position=0.5, xfade=0.0, phaser=None):
         self.phase_pie = phaser or PhasePie()
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
@@ -573,7 +567,107 @@ class Chopper():
         '''only needed for method fft'''
         self.tfade = tfade
 
+
 def noise_test():
+    builder = Builder(cache_dir='test-cache')
+    x_targets = num.array([10.])
+    y_targets = num.array([0.])
+    levels = num.arange(0, 0.5, 0.05)
+    lat = 50.2059
+    lon = 12.5152
+    source_depth = 12000.
+    sampling_rate = 500
+    time_window = 14
+    noise_level = 0.02
+    n_repeat = 100
+    sources = []
+    targets = []
+    mod_fn = 'earthmodel1.nd'
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+    method = 'pymutt'
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
+
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
+    logger.info('Using %s targets' % (len(targets)))
+
+    configs = []
+    tracers = []
+    s0 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=source_depth,
+                          strike=strike,
+                          dip=dip,
+                          rake=rake,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='00',
+                          attitude='master')
+
+    for i_fn, mod_fn in enumerate(['earthmodel1.nd', 'earthmodel2.nd', 'earthmodel3.nd']):
+        config = qseis.QSeisConfigFull.example()
+
+        mod = cake.load_model(mod_fn)
+        config.id='C0%s' % (i_fn)
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_window = time_window
+        config.nsamples = (sampling_rate*config.time_window)+1
+        config.earthmodel_1d = mod
+        config.source_mech = source_mech
+        configs.append(config)
+        p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
+                            phaser=PhasePie(mod=mod), xfade=0.)
+        tracers.append(Tracer(s0, targets[0], p_chopper, config=config))
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    tracers = builder.build(tracers)
+
+    testcouple = SyntheticCouple(master_slave=tracers)
+    colors = UniqueColor(tracers=tracers)
+
+    for i_level, noise_level in enumerate(levels):
+        testcouple.process(
+            method=method, noise_level=noise_level, repeat=n_repeat)
+
+        infos = '''    Noise Test
+        Strike: %s
+        Dip: %s
+        Rake: %s
+        Sampling rate [Hz]: %s
+        dist_x: %s
+        dist_y: %s
+        source_depth: %s
+        noise_level: %s
+        method: %s
+        ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level, method)
+        testcouple.plot(infos=infos, colors=colors, fontsize=8, no_legend=True)
+        outfn = 'test_nl%s.png'% noise_level
+        slopes = defaultdict(list)
+        for tracer, spectra in testcouple.noisy_spectra.get_slopes():
+            x, y, y_off, slope = spectra
+            slopes[tracer].append(slope)
+        fig = plt.gcf()
+        ax = fig.add_subplot(3, 2, 5)
+        ax.set_title('Spectral Slopes')
+        for tracer, sl in slopes.items():
+            ax.hist(sl, color=colors[tracer], alpha=1., bins=20)
+
+        fig.savefig('output/%s.png' % outfn, )
+
+    plt.show()
+
+
+def qp_model_test():
     builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
     y_targets = num.array([0.])
@@ -581,7 +675,7 @@ def noise_test():
     lat = 50.2059
     lon = 12.5152
     source_depth = 12000.
-    sampling_rate = 20
+    sampling_rate = 500
     time_window = 14
     noise_level = 0.02
     n_repeat = 100
@@ -600,44 +694,8 @@ def noise_test():
     targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
 
-    superdirs = ['/home/marius']
-    superdirs.append(os.environ['STORES'])
-
-    config1 = qseis.QSeisConfigFull.example()
-    config2 = qseis.QSeisConfigFull.example()
-    config3 = qseis.QSeisConfigFull.example()
-
-    mod1 = cake.load_model('earthmodel1.nd')
-    mod2 = cake.load_model('earthmodel2.nd')
-    mod3 = cake.load_model('earthmodel3.nd')
-
-    config1.id='C00'
-    config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
-    config1.time_window = time_window
-    config1.nsamples = (sampling_rate*config1.time_window)+1
-    config1.earthmodel_1d = mod1
-    config1.source_mech = source_mech
-
-    config2.id='C01'
-    config2.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
-    config2.time_window = time_window
-    config2.nsamples = (sampling_rate*config2.time_window)+1
-    config2.earthmodel_1d = mod2
-    config2.source_mech = source_mech
-
-    config3.id='C02'
-    config3.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
-    config3.time_window = time_window
-    config3.nsamples = (sampling_rate*config3.time_window)+1
-    config3.earthmodel_1d = mod3
-    config3.source_mech = source_mech
-
-    configs = [config1, config2, config3]
-    qs = qseis.QSeisConfig()
-    qs.qseis_version = '2006a'
-    qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
-
+    configs = []
+    tracers = []
     s0 = HaskellSourceWid(lat=float(lat),
                           lon=float(lon),
                           depth=source_depth,
@@ -650,10 +708,28 @@ def noise_test():
                           risetime=0.02,
                           id='00',
                           attitude='master')
-    p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
-                        phaser=PhasePie(mod=mod1))
 
-    tracers = [Tracer(s0, targets[0], p_chopper, config=conf) for conf in configs]
+    for i_fn, mod_fn in enumerate(['earthmodel1.nd', 'earthmodel2.nd', 'earthmodel3.nd']):
+        config = qseis.QSeisConfigFull.example()
+
+        mod = cake.load_model(mod_fn)
+
+        config.id='C0%s' % (i_fn)
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_window = time_window
+        config.nsamples = (sampling_rate*config.time_window)+1
+        config.earthmodel_1d = mod
+        config.source_mech = source_mech
+        configs.append(config)
+        p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
+                            phaser=PhasePie(mod=mod))
+        tracers.append(Tracer(s0, targets[0], p_chopper, config=config))
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
     tracers = builder.build(tracers)
 
     testcouple = SyntheticCouple(master_slave=tracers)
@@ -662,7 +738,8 @@ def noise_test():
                        noise_level=noise_level,
                        repeat=n_repeat)
 
-    infos = '''Strike: %s
+    infos = '''    Qp Model Test
+    Strike: %s
     Dip: %s
     Rake: %s
     Sampling rate [Hz]: %s
@@ -688,7 +765,7 @@ def noise_test():
     #ax.set_xscale('log')
 
 def sdr_test():
-
+    builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
     y_targets = num.array([0.])
 
@@ -715,11 +792,9 @@ def sdr_test():
     targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
 
-    superdirs = ['/home/marius']
-    superdirs.append(os.environ['STORES'])
     tracers = []
     mod1 = cake.load_model('earthmodel1.nd')
-    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
+    p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
                         phaser=PhasePie(mod=mod1))
     for i_source_mech, source_mech in enumerate(source_mechs):
         config1 = qseis.QSeisConfigFull.example()
@@ -755,8 +830,7 @@ def sdr_test():
     qs.sw_flat_earth_transform = 1
     extra = {'qseis': qs}
 
-    for tracer in tracers:
-        tracer.run(cache_dir='test-cache')
+    tracers = builder.build(tracers)
 
     testcouple = SyntheticCouple(master_slave=tracers)
 
@@ -765,7 +839,8 @@ def sdr_test():
                        repeat=n_repeat,
                        normalize=True)
 
-    infos = '''Strike: %s
+    infos = '''    SDR test
+    Strike: %s
     Dip: %s
     Rake: %s
     Sampling rate [Hz]: %s
@@ -785,6 +860,7 @@ def vp_model_test():
     Eigentlich muesste der Chopper angepasst werden, damit phase in der Mitte
     bleibt. Aber mit normal noise sollte es egal sein, ob noise vor oder hinter
     dem Onset ist.'''
+    builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
     y_targets = num.array([0.])
 
@@ -806,7 +882,6 @@ def vp_model_test():
     v_perturb_perc = num.arange(-2, 2.2, 0.2)
     models = []
     for i_pert, pert in enumerate(v_perturb_perc):
-        print pert
         new_mod = cake.LayeredModel()
         for layer in mod.layers():
             if isinstance(layer, cake.HomogeneousLayer):
@@ -829,8 +904,6 @@ def vp_model_test():
     targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
 
-    superdirs = ['/home/marius']
-    superdirs.append(os.environ['STORES'])
     tracers = []
     s0 = HaskellSourceWid(lat=float(lat),
                           lon=float(lon),
@@ -845,11 +918,7 @@ def vp_model_test():
                           id='std',
                           attitude='master')
 
-    p_chopper = Chopper('first(p|P)', fixed_length=0.3, phase_position=0.5,
-                        phaser=PhasePie(mod=mod))
-
     for i_model, mod in enumerate(models):
-        print mod
         config = qseis.QSeisConfigFull.example()
         config.id='C%s' % i_model
         config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
@@ -857,6 +926,8 @@ def vp_model_test():
         config.nsamples = (sampling_rate*config.time_window)+1
         config.earthmodel_1d = mod
         config.source_mech = source_mech
+        p_chopper = Chopper('first(p|P)', fixed_length=0.1, phase_position=0.5,
+                            phaser=PhasePie(mod=config.earthmodel_1d))
         tracer0 = Tracer(s0, targets[0],
                          chopper=p_chopper,
                          config=config,
@@ -868,8 +939,7 @@ def vp_model_test():
     qs.sw_flat_earth_transform = 1
     extra = {'qseis': qs}
 
-    for tracer in tracers:
-        tracer.run(cache_dir='test-cache')
+    tracers = builder.build(tracers)
 
     testcouple = SyntheticCouple(master_slave=tracers)
     testcouple.process(method='pymutt',
@@ -877,7 +947,8 @@ def vp_model_test():
                        repeat=n_repeat,
                        normalize=True)
 
-    infos = '''Strike: %s
+    infos = ''' VP Model Test
+    Strike: %s
     Dip: %s
     Rake: %s
     Sampling rate [Hz]: %s
@@ -886,14 +957,14 @@ def vp_model_test():
     source_depth: %s
     noise_level: %s
     ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level)
-    #colors = TracerColor(attr='config.id', tracers=tracers)
     colors = UniqueColor(tracers=tracers)
-    testcouple.plot(infos=infos, colors=colors, parameter='vp')
+    testcouple.plot(infos=infos, colors=colors, parameter='vp', no_legend=True)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
     plt.show()
 
 if __name__=='__main__':
+    #qp_model_test()
     noise_test()
     sdr_test()
     vp_model_test()
