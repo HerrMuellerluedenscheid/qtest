@@ -19,6 +19,25 @@ pjoin = os.path.join
 
 logger = logging.getLogger()
 
+
+def add_noise(t, level):
+    ydata = t.get_ydata()
+    noise = num.random.random(len(ydata))-0.5
+    noise *= ((num.max(num.abs(ydata))) * level)
+    ydata += noise
+    t.set_ydata(ydata)
+    return t
+
+
+class RandomNoise:
+    def __init__(self, level):
+        self.level = level
+
+    def noisify(self, tr):
+        tr = tr.copy()
+        return add_noise(tr, self.level)
+
+
 class Builder:
     def __init__(self, cache_dir=False):
         self.runners = []
@@ -95,7 +114,6 @@ class Tracer:
         self.source = source
         self.target = target
         self.config = kwargs.pop('config', None)
-        self.phases = PhasePie(mod=self.config.earthmodel_1d)
         self.traces = None
         self.processed_cache = {}
         self.chopper = chopper
@@ -118,9 +136,23 @@ class Tracer:
             self.processed_cache[component] = tr
         return self.post_process(tr, **pp_kwargs)
 
-    def post_process(self, tr, normalize=False):
+    def post_process(self, tr, normalize=False, response=False, noise=False):
         if normalize:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
+        if response:
+            tr1 = tr.copy()
+            #tr = tr.transfer(transfer_function=response)
+            tr = response.convolve(tr)
+            #trace.snuffle([tr1, tr])
+            #import matplotlib.pyplot as plt
+            #fig = plt.figure()
+            #ax = fig.add_subplot(111)
+            #ax.plot(tr1.ydata)
+            #ax.plot(tr.ydata)
+            #plt.show()
+        if noise:
+            tr = noise.noisify(tr)
+
         return tr
 
     def filter_by_component(self, component):
@@ -137,6 +169,32 @@ class Tracer:
 
     def snuffle(self):
         trace.snuffle(self.traces)
+
+    def onset(self):
+        return self.chopper.onset(self.source, self.target)
+
+class QResponse(trace.FrequencyResponse):
+    def __init__(self, Q, x, v):
+        self.Q = Q
+        self.x = x
+        self.v = v
+
+    def convolve(self, tr):
+        new_tr = tr.copy()
+        ydata = new_tr.get_ydata() 
+        #freqs = num.fft.rfftfreq(len(ydata), d=new_tr.deltat)
+        f, a = tr.spectrum()
+        B = num.fft.rfft(self.evaluate(a, f))
+        new_tr.set_ydata(num.fft.irfft(B))
+        new_tr.snuffle()
+        return new_tr
+
+    def evaluate(self,A,  freqs):
+        i = num.complex(0,1)
+        e = num.e
+        pi = num.pi
+        return A* num.exp(-pi*freqs*self.x/self.v/self.Q)
+        #return num.exp(e*pi*freqs*self.x/(self.Q*self.v)) * num.exp(e*i*2*pi*freqs*self.x/self.v)
 
 
 class OnDemandEngine():
@@ -218,7 +276,6 @@ def create_store(superdir, store_dir, config, source, target, force=False, nwork
 
     Store.create_editables(store_dir, config=config, force=force, extra=extra)
     module = qseis
-    print 'done'
     #gf.Store(store_dir)
     module.build(store_dir, force=force, nworkers=nworkers)
 
