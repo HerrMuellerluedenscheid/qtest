@@ -263,7 +263,7 @@ class Spectra(DDContainer):
             fx, fy = num.vsplit(fxfy, 2)
             #fc = 1./(0.5*s.risetime)
             #fc = 50.
-            slope_section = extract(fxfy, upper_lim=fc, lower_lim=230.)
+            slope_section = extract(fxfy, upper_lim=50, lower_lim=230.)
             popt, pcov = curve_fit(self.fit_function, *slope_section)
             fy_fit = self.fit_function(slope_section[0], popt[0], popt[1]),
             slopes.append((tracer, (slope_section[0], num.array(fy_fit).T, popt[0], popt[1])))
@@ -456,7 +456,7 @@ class SyntheticCouple():
             maxQ = max(Qs)
             minQ = min(Qs)
 
-            c_m = mpl.cm.jet
+            c_m = mpl.cm.coolwarm
             norm = mpl.colors.Normalize(vmin=minQ, vmax=maxQ)
             s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
             s_m.set_array([])
@@ -476,7 +476,6 @@ class SyntheticCouple():
             ax.set_xlabel('Q')
         ax = fig.add_subplot(3, 2, 6)
         infos(ax, kwargs.pop('infos'))
-        plt.show()
 
     def delta_onset(self):
         ''' Get the onset difference between two (!) used phases'''
@@ -687,7 +686,7 @@ def noise_test():
     source_depth = 12000.
     sampling_rate = 500
     time_window = 14
-    noise_level = 0.02
+    noise_level = 0.05
     n_repeat = 50
     sources = []
     targets = []
@@ -759,7 +758,7 @@ def noise_test():
         method: %s
         ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, source_depth, noise_level, method)
         testcouple.plot(infos=infos, colors=colors, fontsize=8, no_legend=True)
-        #fig = plt.gcf()
+        fig = plt.gcf()
         #ax = fig.add_subplot(3, 2, 5)
         #slope_histogram(ax, testcouple.noisy_spectra, colors)
         outfn = 'test_nl%s.png'% noise_level
@@ -1387,6 +1386,7 @@ def invert_test_2():
     inverter = QInverter(couples=testcouples)
     inverter.invert(fmin=50, fmax=200)
     inverter.plot()
+    plt.show()
 
 if __name__=='__main__':
     #invert_test_1()
