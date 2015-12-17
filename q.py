@@ -1333,7 +1333,7 @@ def invert_test_2():
         pair = []
         for i_s, src in enumerate([s0, s1]):
             config = qseis.QSeisConfigFull.example()
-            mod = cake.load_model('models/inv_test.nd')
+            mod = cake.load_model('models/inv_test2.nd')
             config.id='C0%s' % (i_s)
             config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
             config.time_window = time_window
