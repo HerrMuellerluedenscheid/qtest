@@ -88,13 +88,18 @@ def plot_traces(tr, ax=None, label='', color='r'):
     ax.set_xlabel('time [s]')
     ax.set_ylabel('displ [m]')
 
-def plot_model(mod, ax=None, label='', color=None, parameter='qp'):
+def plot_model(mod, ax=None, label='', color=None, parameters=['qp']):
     ax = ax_if_needed(ax)
     z = mod.profile('z')
-    profile = mod.profile(parameter)
-    ax.plot(profile, -z, label=label, c=color)
+    colors = 'rgbcy'
+    for ip, parameter in enumerate(parameters):
+        profile = mod.profile(parameter)
+        if ip>=1:
+            ax = ax.twiny()
+        ax.plot(profile, -z, label=label, c=colors[ip])
+        ax.set_xlabel(parameter, color=colors[ip])
+    
     ax.set_ylabel('depth [m]')
-    ax.set_title(parameter)
 
 def infos(ax, info_string):
     ax.axis('off')
@@ -372,7 +377,6 @@ class SyntheticCouple():
         self.spectra = Spectra()
         self.noisy_spectra = Spectra()
         self.fit_function = None
-        self.use_component = 'z'
         self.colors = None
 
         self.repeat = 1
@@ -383,13 +387,13 @@ class SyntheticCouple():
         self.repeat = pp_kwargs.pop('repeat', self.repeat)
         check_method(method)
         for tracer in self.master_slave:
-            tr = tracer.process(self.use_component, **pp_kwargs)
+            tr = tracer.process(**pp_kwargs)
             f, a = self.get_spectrum(tr, method, tracer.chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
             for i in xrange(self.repeat):
-                tr = tracer.process(self.use_component, **pp_kwargs).copy()
+                tr = tracer.process(**pp_kwargs).copy()
                 tr_noise = add_noise(tr, level=self.noise_level)
                 f, a = self.get_spectrum(tr_noise, method, tracer.chopper)
                 fxfy = num.vstack((f,a))
@@ -410,24 +414,23 @@ class SyntheticCouple():
                        label=tracer.config.id,
                        color=colors[tracer],
                        ax=ax,
-                       parameter=kwargs.get('parameter', 'qp'))
+                       parameters=kwargs.get('parameters', ['qp', 'qs']))
 
-        ax.set_xlim((ax.get_xlim()[0]*0.9,
-                     ax.get_xlim()[1]*1.1))
+        #ax.set_xlim((ax.get_xlim()[0]*0.9,
+        #             ax.get_xlim()[1]*1.1))
         for tr in self.master_slave:
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
                        color=colors[tr])
-        if not kwargs.get('no_legend', False):
-            ax.legend()
+        #if not kwargs.get('no_legend', False):
+        #    ax.legend()
         ax = fig.add_subplot(3, 2, 3)
         for tracer in self.master_slave:
-            plot_traces(tr=tracer.process(
-                self.use_component, normalize=kwargs.get('normalize', False)),
+            plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
                         ax=ax, label=tr.config.id,
                         color=colors[tracer])
 
         if self.noise_level!=0.:
-            trs = tracer.process(self.use_component, normalize=kwargs.get('normalize', False)).copy()
+            trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
             trs = add_noise(trs, level=self.noise_level)
             plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
 
@@ -1273,7 +1276,7 @@ def invert_test_1():
     inverter.invert(fmin=50, fmax=200)
     inverter.plot()
 
-def invert_test_2():
+def invert_test_2(noise_level=0.001):
     print '-------------------invert_test_2-------------------------------'
     builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
@@ -1283,7 +1286,6 @@ def invert_test_2():
     lon = 12.5152
     sampling_rate = 500
     time_window = 25
-    noise_level = 0.001
     n_repeat = 100
     sources = []
     targets = []
@@ -1388,12 +1390,134 @@ def invert_test_2():
     inverter.plot()
     plt.show()
 
+def qpqs():
+    print '-------------------qp qs test-------------------------------'
+    builder = Builder(cache_dir='test-cache')
+    x_targets = num.array([10.])
+    y_targets = num.array([0.])
+
+    lat = 50.2059
+    lon = 12.5152
+    sampling_rate = 500
+    time_window = 30
+    #@sampling_rate = 500
+    #time_window = 25
+    noise_level = 0.001
+    n_repeat = 100
+    sources = []
+    targets = []
+    method = 'mtspec'
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
+
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'NEZ',  **target_kwargs)
+    logger.info('Using %s targets' % (len(targets)))
+
+    configs = []
+    tracers = []
+    #source_depth_pairs = [(8*km, 10*km), (10*km, 12*km), (12*km, 14*km), (8*km, 14*km)]
+    source_depth = 11.5*km
+    pairs = []
+    #mod = cake.load_model('models/inv_test2.nd')
+    mod = cake.load_model('models/constantall.nd')
+    s0 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=source_depth,
+                          strike=strike,
+                          dip=dip,
+                          rake=rake,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='00',
+                          attitude='master')
+
+    s1 = HaskellSourceWid(lat=float(lat),
+                          lon=float(lon),
+                          depth=source_depth,
+                          strike=strike,
+                          dip=dip,
+                          rake=rake,
+                          magnitude=.5,
+                          length=0.,
+                          width=0.,
+                          risetime=0.02,
+                          id='00',
+                          attitude='master')
+    p_chopper = Chopper('first(p|P)',
+                        fixed_length=0.2,
+                        phase_position=0.5,
+                        phaser=PhasePie(mod=mod))
+    s_chopper = Chopper('first(s|S)',
+                        fixed_length=0.2,
+                        phase_position=0.5,
+                        phaser=PhasePie(mod=mod))
+    choppers = [p_chopper, s_chopper]
+    pair = []
+    components2use = ['v', 't']
+    for i_s, src in enumerate([s0, s1]):
+        config = qseis.QSeisConfigFull.example()
+        mod = cake.load_model('models/inv_test2.nd')
+        config.id='C0%s' % (i_s)
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_window = time_window
+        config.nsamples = (sampling_rate*config.time_window)+1
+        config.earthmodel_1d = mod
+        config.source_mech = source_mech
+        configs.append(config)
+        tracer = Tracer(src, targets[0], choppers[i_s], config=config, use_component=components2use[i_s])
+        tracers.append(tracer)
+        pair.append(tracer)
+
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    tracers = builder.build(tracers, snuffle=True)
+    noise = RandomNoise(noise_level)
+    testcouple = SyntheticCouple(master_slave=pair)
+    #testcouple.process(method='pymutt',
+    testcouple.process(method=method,
+                       #noise_level=0.1,
+                       repeat=n_repeat, 
+                       noise=noise)
+    infos = '''
+    Strike: %s
+    Dip: %s
+    Rake: %s
+    Sampling rate [Hz]: %s
+    dist_x: %s
+    dist_y: %s
+    noise_level: %s
+    method: %s
+    ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
+    colors = UniqueColor(tracers=tracers)
+    testcouple.plot(infos=infos, colors=colors, noisy_Q=True)
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
+
+    inverter = QInverter(couples=[testcouple])
+    inverter.invert(fmin=50, fmax=200)
+    inverter.plot()
+    plt.show()
+
 if __name__=='__main__':
     #invert_test_1()
-    invert_test_2()
-    noise_test()
-    qp_model_test()
-    constant_qp_test()
-    sdr_test()
-    vp_model_test()
-    sys.exit(0)
+    #qpqs()
+    #invert_test_2()
+    invert_test_2(noise_level=0.00001)
+    #noise_test()
+    #qp_model_test()
+    #constant_qp_test()
+    #sdr_test()
+    #vp_model_test()
+    #sys.exit(0)
