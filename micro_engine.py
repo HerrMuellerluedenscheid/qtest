@@ -43,7 +43,7 @@ class Builder:
         self.runners = []
         self.cache_dir = cache_dir
 
-    def build(self, tracers):
+    def build(self, tracers, snuffle=False):
         ready = []
         need_work = []
         for tr in tracers:
@@ -64,6 +64,10 @@ class Builder:
             if self.cache_dir:
                 self.cache(tr, load=False)
             del(runner)
+
+        if snuffle:
+            for tracer in ready:
+                trace.snuffle(tracer.traces)
 
         return ready
 
@@ -103,13 +107,13 @@ class Builder:
             trc = trace.Trace(
                 ydata=data[1], tmin=tmin, deltat=dt, channel=fn.split('.')[-1][-1])
             traces.append(trc)
-        trace.snuffle(traces)
 
         return traces
 
 
 class Tracer:
-    def __init__(self, source, target, chopper, *args, **kwargs):
+    def __init__(self, source, target, chopper, component='v', *args, **kwargs):
+        ''':param component: qseis component'''
         self.runner = None
         self.source = source
         self.target = target
@@ -118,6 +122,7 @@ class Tracer:
         self.processed_cache = {}
         self.chopper = chopper
         self.kwargs = kwargs
+        self.component = component
 
         self.config.receiver_distances = [source.distance_to(target)/1000.]
         self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
@@ -127,13 +132,13 @@ class Tracer:
     def read_files(self, dir):
         self.traces = io.load(dir)
 
-    def process(self, component, **pp_kwargs):
-        tr = self.processed_cache.get(component, False)
+    def process(self, **pp_kwargs):
+        tr = self.processed_cache.get(self.component, False)
         if not tr:
-            tr_raw = self.filter_by_component(component).copy()
+            tr_raw = self.filter_by_component(self.component).copy()
             tr = self.chopper.chop(
                 self.source, self.target, tr_raw)
-            self.processed_cache[component] = tr
+            self.processed_cache[self.component] = tr
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
