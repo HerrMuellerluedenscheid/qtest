@@ -232,6 +232,7 @@ def spectralize(tr, method, chopper=None):
         r = pymutt.mtft(tr.ydata, dt=tr.deltat)
         f = num.arange(r['nspec'])*r['df']
         a = r['power']
+        a = num.sqrt(a)
 
     elif method=='mtspec':
         a, f = mtspec(data=tr.ydata,
@@ -240,8 +241,9 @@ def spectralize(tr, method, chopper=None):
                       time_bandwidth=2.,
                       nfft=2**9,
                       statistics=False)
+        a = num.sqrt(a)
 
-    return f, num.sqrt(a)
+    return f, a
 
 def slope_histogram(ax, spectra, colors):
     slopes = defaultdict(list)
