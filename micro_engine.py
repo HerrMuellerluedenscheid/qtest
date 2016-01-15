@@ -2,7 +2,7 @@ import numpy as num
 import os
 import tempfile
 import glob
-from autogain.autogain import PhasePie
+from collections import defaultdict
 from pyrocko.fomosto import qseis
 from pyrocko import trace
 from pyrocko import guts
@@ -36,6 +36,35 @@ class RandomNoise:
     def noisify(self, tr):
         tr = tr.copy()
         return add_noise(tr, self.level)
+
+class DDContainer():
+    """ A Double Dict Container..."""
+    def __init__(self, key1=None, key2=None, value=None):
+        self.content = defaultdict(dict)
+        if key1 and key2 and value:
+            self.content[key1][key2] = value
+
+    def iterdd(self):
+        for key1, key2_value in self.content.iteritems():
+            for key2, value in key2_value.iteritems():
+                yield key1, key2, value
+
+    def __getitem__(self, keys):
+        return self.content[keys[0]][keys[1]]
+
+    def add(self, key1, key2, value):
+        self.content[key1][key2] = value
+
+    def as_lists(self):
+        keys1 = []
+        keys2 = []
+        values = []
+        for k1,k2,v in self.iterdd():
+            keys1.append(k1)
+            keys2.append(k2)
+            values.append(v)
+
+        return keys1, keys2, values
 
 
 class Builder:
@@ -85,8 +114,9 @@ class Builder:
             for sdir in subdirs:
                 config = guts.load(filename=pjoin(self.cache_dir, sdir, configfn))
                 tr.config.regularize()
-                if str(config)==str(tr.config):
-                    tr.read_files(pjoin(self.cache_dir, sdir, fn))
+                file_path = pjoin(self.cache_dir, sdir, fn)
+                if str(config)==str(tr.config) and os.path.isfile(file_path):
+                    tr.read_files(file_path)
                     found_cache = True
 
         elif self.cache_dir and not load:
@@ -136,9 +166,8 @@ class Tracer:
         tr = self.processed_cache.get(self.component, False)
         if not tr:
             tr_raw = self.filter_by_component(self.component).copy()
-            tr = self.chopper.chop(
-                self.source, self.target, tr_raw)
-            self.processed_cache[self.component] = tr
+            tr = self.chopper.chop(self.source, self.target, tr_raw)
+        self.processed_cache[self.component] = tr
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
@@ -149,12 +178,6 @@ class Tracer:
             #tr = tr.transfer(transfer_function=response)
             tr = response.convolve(tr)
             #trace.snuffle([tr1, tr])
-            #import matplotlib.pyplot as plt
-            #fig = plt.figure()
-            #ax = fig.add_subplot(111)
-            #ax.plot(tr1.ydata)
-            #ax.plot(tr.ydata)
-            #plt.show()
         if noise:
             tr = noise.noisify(tr)
 
@@ -177,6 +200,71 @@ class Tracer:
 
     def onset(self):
         return self.chopper.onset(self.source, self.target)
+
+
+class Chopper():
+    def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
+                 phase_position=0.5, xfade=0.0, phaser=None):
+        self.phase_pie = phaser or PhasePie()
+        self.startphasestr = startphasestr
+        self.endphasestr = endphasestr
+        self.phase_position = phase_position
+        self.fixed_length = fixed_length
+        self.chopped = DDContainer()
+        self.xfade = xfade
+
+    def chop(self, s, t, tr, debug=True):
+        dist = s.distance_to(t)
+        depth = s.depth
+        tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
+        if self.endphasestr!=None and self.fixed_length==None:
+            tend = self.phase_pie.t(self.endphasestr, (depth, dist))
+        elif self.endphasestr==None and self.fixed_length!=None:
+            tend = self.fixed_length+tstart
+        else:
+            raise Exception('Need to define exactly one of endphasestr and fixed length')
+        tr_bkp = tr
+        logger.info('lowpass filter with 0.5/nyquist')
+        tr = tr.copy()
+        tr.set_location('cp')
+        trange = tend-tstart
+        tstart -= trange*self.phase_position
+        tend -= trange*self.phase_position
+        if debug:
+            import pdb 
+            pdb.set_trace()
+            tr.snuffle()
+            print tstart
+            print tend
+        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
+        taperer = trace.CosFader(xfrac=self.get_xfade())
+        tr.taper(taperer)
+        self.chopped.add(s,t,tr)
+        return tr
+
+    def get_xfade(self):
+        return self.xfade
+
+    def get_tfade(self, t_span):
+        return self.xfade*t_span
+
+    def iter_results(self):
+        return self.chopped.iterdd()
+
+    def set_trange(self):
+        _,_, times = self.table.as_lists()
+
+        mintrange = 99999.
+        for tstart, tend in times:
+            trange = tstart-tend
+            mintrange = trange if trange < mintrange else 99999.
+    
+    def set_tfade(self, tfade):
+        '''only needed for method fft'''
+        self.tfade = tfade
+    
+    def onset(self, s, t):
+        return self.phase_pie.t(self.startphasestr, (s.depth, s.distance_to(t)))
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):

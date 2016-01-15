@@ -22,7 +22,8 @@ import matplotlib.pyplot as plt
 import numpy as num
 import sys
 import os
-from micro_engine import OnDemandEngine, Tracer, create_store, Builder, QResponse, add_noise, RandomNoise
+from micro_engine import OnDemandEngine, Tracer, create_store, Builder
+from micro_engine import QResponse, add_noise, RandomNoise, Chopper, DDContainer
 from autogain.autogain import PhasePie
 import logging 
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ def getattr_dot(obj, attr):
     return v
 
 def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
+    assert len(x)==len(y)
     targets = []
     for istat, xy in enumerate(zip(x,y)):
         for c in channels:
@@ -64,11 +66,11 @@ def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
             targets.append(Target(**kwargs))
     return targets
 
-def regression(tr, method, fmin=0., fmax=9999, chopper=None):
-    fx, fy = spectralize(tr, method=method, chopper=chopper)
-    indx = num.where(num.logical_and(fx>=fmin, fx<=fmax))
-    #slope, interc, r_value, p_value, stderr = linregress(fx, num.log(num.abs(fy)))
-    return linregress(fx, num.log(num.abs(fy)))
+#def regression(tr, method, fmin=0., fmax=9999, chopper=None):
+#    fx, fy = spectralize(tr, method=method, chopper=chopper)
+#    indx = num.where(num.logical_and(fx>=fmin, fx<=fmax))
+#    #slope, interc, r_value, p_value, stderr = linregress(fx, num.log(num.abs(fy)))
+#    return linregress(fx, num.log(num.abs(fy)))
 
 def legend_clear_duplicates(ax):
     from collections import OrderedDict
@@ -186,35 +188,6 @@ class HaskellSourceWid(RectangularSource):
 
 # Eine station aus dem webnet
 # KVC
-
-class DDContainer():
-    """ A Double Dict Container..."""
-    def __init__(self, key1=None, key2=None, value=None):
-        self.content = defaultdict(dict)
-        if key1 and key2 and value:
-            self.content[key1][key2] = value
-
-    def iterdd(self):
-        for key1, key2_value in self.content.iteritems():
-            for key2, value in key2_value.iteritems():
-                yield key1, key2, value
-
-    def __getitem__(self, keys):
-        return self.content[keys[0]][keys[1]]
-
-    def add(self, key1, key2, value):
-        self.content[key1][key2] = value
-
-    def as_lists(self):
-        keys1 = []
-        keys2 = []
-        values = []
-        for k1,k2,v in self.iterdd():
-            keys1.append(k1)
-            keys2.append(k2)
-            values.append(v)
-
-        return keys1, keys2, values
 
 def linear_fit(x, y, m):
     return y+m*x
@@ -564,65 +537,6 @@ class SyntheticCouple():
             intersecting_slave, average_spectrum_slave = fx_slave[0], fy_slave[0]
         return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
 
-
-class Chopper():
-    def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
-                 phase_position=0.5, xfade=0.0, phaser=None):
-        self.phase_pie = phaser or PhasePie()
-        self.startphasestr = startphasestr
-        self.endphasestr = endphasestr
-        self.phase_position = phase_position
-        self.fixed_length = fixed_length
-        self.chopped = DDContainer()
-        self.xfade = xfade
-
-    def chop(self, s, t, tr):
-        dist = s.distance_to(t)
-        depth = s.depth
-        tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
-        if self.endphasestr!=None and self.fixed_length==None:
-            tend = self.phase_pie.t(self.endphasestr, (depth, dist))
-        elif self.endphasestr==None and self.fixed_length!=None:
-            tend = self.fixed_length+tstart
-        else:
-            raise Exception('Need to define exactly one of endphasestr and fixed length')
-        tr_bkp = tr
-        logger.info('lowpass filter with 0.5/nyquist')
-        tr = tr.copy()
-        tr.set_location('cp')
-        trange = tend-tstart
-        tstart -= trange*self.phase_position
-        tend -= trange*self.phase_position
-        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
-        taperer = trace.CosFader(xfrac=self.get_xfade())
-        tr.taper(taperer)
-        self.chopped.add(s,t,tr)
-        return tr
-
-    def get_xfade(self):
-        return self.xfade
-
-    def get_tfade(self, t_span):
-        return self.xfade*t_span
-
-    def iter_results(self):
-        return self.chopped.iterdd()
-
-    def set_trange(self):
-        _,_, times = self.table.as_lists()
-
-        mintrange = 99999.
-        for tstart, tend in times:
-            trange = tstart-tend
-            mintrange = trange if trange < mintrange else 99999.
-        return mintrange
-
-    def set_tfade(self, tfade):
-        '''only needed for method fft'''
-        self.tfade = tfade
-
-    def onset(self, s, t):
-        return self.phase_pie.t(self.startphasestr, (s.depth, s.distance_to(t)))
 
 def noisy_spectral_ratios(pairs, fmin, fmax):
     '''Ratio of two overlapping spectra'''
@@ -1392,6 +1306,123 @@ def invert_test_2(noise_level=0.001):
     inverter.plot()
     plt.show()
 
+def invert_test_2D(noise_level=0.001):
+    print '-------------------invert_test_2D -------------------------------'
+    builder = Builder(cache_dir='test-cache')
+    #x_targets = num.array([20000.])
+    x_targets = num.array([10000., 20000., 30000., 40000., 50000., 60000.])
+    y_targets = num.array([0.]*len(x_targets))
+
+    lat = 50.2059
+    lon = 12.5152
+    sampling_rate = 500.
+    time_window = 25.
+    n_repeat = 100
+    sources = []
+    method = 'mtspec'
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+    earthmodel = 'models/inv_test2_simple.nd'
+    component = 'z'
+    target_kwargs = {'elevation': 0,
+                     'codes': ('', 'KVC', '', 'Z'),
+                     'store_id': None}
+
+    targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
+    print targets
+    logger.info('Using %s targets' % (len(targets)))
+
+    configs = []
+    tracers = []
+    #source_depth_pairs = [(8*km, 10*km), (10*km, 12*km), (12*km, 14*km), (8*km, 14*km)]
+    source_depth_pairs = [(9*km, 11*km)]
+    pairs = []
+    for z_pair in source_depth_pairs:
+        s0 = HaskellSourceWid(lat=float(lat),
+                              lon=float(lon),
+                              depth=z_pair[0],
+                              strike=strike,
+                              dip=dip,
+                              rake=rake,
+                              magnitude=.5,
+                              length=0.,
+                              width=0.,
+                              risetime=0.02,
+                              id='00',
+                              attitude='master')
+
+        s1 = HaskellSourceWid(lat=float(lat),
+                              lon=float(lon),
+                              depth=z_pair[1],
+                              strike=strike,
+                              dip=dip,
+                              rake=rake,
+                              magnitude=.5,
+                              length=0.,
+                              width=0.,
+                              risetime=0.02,
+                              id='00',
+                              attitude='master')
+        for target in targets:
+            pair = []
+            for i_s, src in enumerate([s0, s1]):
+                config = qseis.QSeisConfigFull.example()
+                mod = cake.load_model(earthmodel)
+                config.id='C0%s' % (i_s)
+                config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+                config.time_window = time_window
+                config.nsamples = (sampling_rate*config.time_window)+1
+                config.earthmodel_1d = mod
+                config.source_mech = source_mech
+                configs.append(config)
+                p_chopper = Chopper('first(p|P)',
+                                    fixed_length=1.,
+                                    phase_position=0.5,
+                                    phaser=PhasePie(mod=mod))
+                tracer = Tracer(src, target, p_chopper, config=config,
+                                component=component)
+                tracers.append(tracer)
+                pair.append(tracer)
+            pairs.append(pair)
+
+
+    qs = qseis.QSeisConfig()
+    qs.qseis_version = '2006a'
+    qs.sw_flat_earth_transform = 1
+    extra = {'qseis': qs}
+
+    tracers = builder.build(tracers, snuffle=False)
+
+    noise = RandomNoise(noise_level)
+    testcouples = []
+    for pair in pairs:
+        testcouple = SyntheticCouple(master_slave=pair)
+        testcouple.process(method=method,
+                           repeat=n_repeat, 
+                           noise=noise)
+        testcouples.append(testcouple)
+        infos = '''
+        Strike: %s
+        Dip: %s
+        Rake: %s
+        Sampling rate [Hz]: %s
+        dist_x: %s
+        dist_y: %s
+        noise_level: %s
+        method: %s
+        ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
+        colors = UniqueColor(tracers=tracers)
+        testcouple.plot(infos=infos, colors=colors, noisy_Q=False)
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
+
+    inverter = QInverter(couples=testcouples)
+    inverter.invert(fmin=50, fmax=200)
+    inverter.plot()
+    plt.show()
+
 def qpqs():
     print '-------------------qp qs test-------------------------------'
     builder = Builder(cache_dir='test-cache')
@@ -1516,7 +1547,8 @@ if __name__=='__main__':
     #invert_test_1()
     #qpqs()
     #invert_test_2()
-    invert_test_2(noise_level=0.00001)
+    #invert_test_2(noise_level=0.00001)
+    invert_test_2D()
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
