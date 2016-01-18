@@ -827,7 +827,7 @@ def qp_model_test():
         mod = cake.load_model(mod_fn)
 
         config.id='C0%s' % (i_fn)
-        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
         config.time_window = time_window
         config.nsamples = (sampling_rate*config.time_window)+1
         config.earthmodel_1d = mod
@@ -914,7 +914,7 @@ def sdr_test():
         config1 = qseis.QSeisConfigFull.example()
 
         config1.id='C%s' % i_source_mech
-        config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config1.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
         config1.time_window = time_window
         config1.nsamples = (sampling_rate*config1.time_window)+1
         config1.earthmodel_1d = mod1
@@ -1035,7 +1035,7 @@ def vp_model_test():
     for i_model, mod in enumerate(models):
         config = qseis.QSeisConfigFull.example()
         config.id='C%s' % i_model
-        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+        config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
         config.time_window = time_window
         config.nsamples = (sampling_rate*config.time_window)+1
         config.earthmodel_1d = mod
@@ -1142,7 +1142,7 @@ def invert_test_1():
             config = qseis.QSeisConfigFull.example()
             mod = cake.load_model('models/earthmodel1.nd')
             config.id='C0%s' % (i_s)
-            config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+            config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
             config.time_window = time_window
             config.nsamples = (sampling_rate*config.time_window)+1
             config.earthmodel_1d = mod
@@ -1253,7 +1253,7 @@ def invert_test_2(noise_level=0.001):
             config = qseis.QSeisConfigFull.example()
             mod = cake.load_model('models/inv_test2.nd')
             config.id='C0%s' % (i_s)
-            config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+            config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
             config.time_window = time_window
             config.nsamples = (sampling_rate*config.time_window)+1
             config.earthmodel_1d = mod
@@ -1371,7 +1371,7 @@ def invert_test_2D(noise_level=0.001):
                 config = qseis.QSeisConfigFull.example()
                 mod = cake.load_model(earthmodel)
                 config.id='C0%s' % (i_s)
-                config.time_region = [meta.Timing(-time_window/2.), meta.Timing(-time_window/2.)]
+                config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
                 config.time_window = time_window
                 config.nsamples = (sampling_rate*config.time_window)+1
                 config.earthmodel_1d = mod
