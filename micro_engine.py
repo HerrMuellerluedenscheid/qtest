@@ -84,10 +84,7 @@ class Builder:
 
         for tr, runner in parimap(self.work, need_work):
             tmpdir = runner.tempdir
-            tmin = tr.config.time_start
-            tmax = tr.config.time_window+tmin
-
-            traces = self.load_seis(tmpdir, tmin=tmin, tmax=tmax)
+            traces = self.load_seis(tmpdir, tr.config)
             tr.traces = traces
             ready.append(tr)
             if self.cache_dir:
@@ -126,16 +123,25 @@ class Builder:
             logger.info('cached under: %s' % self.cache_dir)
         return found_cache
 
-    def load_seis(self, directory, tmin, tmax):
+    def load_seis(self, directory, config):
         # Hier mussen die files seis.tr, seis.... etc. aus der qseis temp directory 
         # geladen werden und wieder in den tracer gefuettert werden.
         fns = glob.glob(pjoin(directory, 'seis.*'))
         traces = []
+        tmin = config.time_start
+        vred = config.time_reduction_velocity
+        distances = config.receiver_distances
+        assert len(distances)==1
+        if vred != 0.:
+            tmin += distances[0]/vred
+
         for fn in fns:
-            data = num.loadtxt(fn, skiprows=1).T
-            dt = (tmax-tmin)/(len(data[1])-1)
+            data = num.loadtxt(fn, skiprows=1, dtype=num.float)
+            nsamples, ntraces = data.shape
+            deltat = (data[-1, 0] - data[0, 0])/(nsamples-1)
+
             trc = trace.Trace(
-                ydata=data[1], tmin=tmin, deltat=dt, channel=fn.split('.')[-1][-1])
+                ydata=data[:, 1], tmin=tmin+deltat, deltat=deltat, channel=fn.split('.')[-1][-1])
             traces.append(trc)
 
         return traces
@@ -213,7 +219,7 @@ class Chopper():
         self.chopped = DDContainer()
         self.xfade = xfade
 
-    def chop(self, s, t, tr, debug=True):
+    def chop(self, s, t, tr, debug=False):
         dist = s.distance_to(t)
         depth = s.depth
         tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
