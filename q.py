@@ -1,31 +1,25 @@
 import matplotlib as mpl
 mpl.use('Qt4Agg')
-mpl.rc('ytick', labelsize=8) 
-mpl.rc('xtick', labelsize=8) 
+mpl.rc('ytick', labelsize=8)
+mpl.rc('xtick', labelsize=8)
 
-import multiprocessing
 import copy
 from pyrocko.gf import meta, DCSource, RectangularSource, Target
-from pyrocko.guts import *
-from pyrocko import gui_util
+from pyrocko.guts import String
 from pyrocko import orthodrome
-from pyrocko import trace
 from pyrocko import cake
-from pyrocko import crust2x2
 from pyrocko.fomosto import qseis
-from pyrocko.parimap import parimap
 
 from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
-import sys
 import os
-from micro_engine import OnDemandEngine, Tracer, create_store, Builder
-from micro_engine import QResponse, add_noise, RandomNoise, Chopper, DDContainer
+from micro_engine import Tracer, Builder
+from micro_engine import add_noise, RandomNoise, Chopper, DDContainer
 from autogain.autogain import PhasePie
-import logging 
+import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 pjoin = os.path.join
@@ -43,34 +37,32 @@ try:
 except Exception as e:
     logger.exception(e)
 
+
 def check_method(method):
-    if not method in methods_avail:
+    if method not in methods_avail:
         logger.exception("Method %s not available" % method)
         raise Exception("Method %s not available" % method)
     else:
-        logger.debug('method used %s' %method)
+        logger.debug('method used %s' % method)
         return True
+
 
 def getattr_dot(obj, attr):
     v = reduce(getattr, attr.split('.'), obj)
     return v
 
+
 def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
-    assert len(x)==len(y)
+    assert len(x) == len(y)
     targets = []
-    for istat, xy in enumerate(zip(x,y)):
+    for istat, xy in enumerate(zip(x, y)):
         for c in channels:
             lat, lon = orthodrome.ne_to_latlon(o_lat, o_lon, *xy)
             kwargs.update({'lat': float(lat), 'lon': float(lon),
-                           'codes':('', '%i'%istat, '', c)})
+                           'codes': ('', '%i' % istat, '', c)})
             targets.append(Target(**kwargs))
     return targets
 
-#def regression(tr, method, fmin=0., fmax=9999, chopper=None):
-#    fx, fy = spectralize(tr, method=method, chopper=chopper)
-#    indx = num.where(num.logical_and(fx>=fmin, fx<=fmax))
-#    #slope, interc, r_value, p_value, stderr = linregress(fx, num.log(num.abs(fy)))
-#    return linregress(fx, num.log(num.abs(fy)))
 
 def legend_clear_duplicates(ax):
     from collections import OrderedDict
@@ -78,17 +70,20 @@ def legend_clear_duplicates(ax):
     by_label = OrderedDict(zip(labels, handles))
     ax.legend(by_label.values(), by_label.keys())
 
+
 def ax_if_needed(ax):
     if not ax:
         fig = plt.figure()
         ax = fig.add_subplot(111)
     return ax
 
+
 def plot_traces(tr, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
     ax.set_xlabel('time [s]')
     ax.set_ylabel('displ [m]')
+
 
 def plot_model(mod, ax=None, label='', color=None, parameters=['qp']):
     ax = ax_if_needed(ax)
@@ -100,12 +95,14 @@ def plot_model(mod, ax=None, label='', color=None, parameters=['qp']):
             ax = ax.twiny()
         ax.plot(profile, -z, label=label, c=colors[ip])
         ax.set_xlabel(parameter, color=colors[ip])
-    
+
     ax.set_ylabel('depth [m]')
+
 
 def infos(ax, info_string):
     ax.axis('off')
     ax.text(0., 0, info_string, transform=ax.transAxes)
+
 
 def plot_locations(items):
     f = plt.figure(figsize=(3,3))
@@ -128,18 +125,6 @@ def plot_locations(items):
     ax.set_xlim([num.min(lons)-0.05*x_range, num.max(lons)+0.05*x_range])
     f.savefig("locations_plot.png", dpi=160., bbox_inches='tight', pad_inches=0.01)
 
-#def compile_slopes(slopes):
-#    fig = plt.figure()
-#    ax = fig.add_subplot(111)
-#    for slope in slopes:
-#        for s, ta, slope_data in slope.iterdd():
-#            x, y, m, interc = slope_data
-#            if s.attitude=='master':
-#                ax.plot(x,y,'o',alpha=0.2)
-#            else:
-#                ax.plot(x,y,alpha=0.2)
-#
-#    ax.set_yscale("log")
 
 def intersect_all(*args):
     for i, l in enumerate(args):
@@ -151,6 +136,7 @@ def intersect_all(*args):
             except IndexError:
                 return inters
 
+'''
 def average_spectra(fxs, fys):
     x_intersect = intersect_all(*fxs)
     intersecting = num.zeros((len(x_intersect), len(fys)))
@@ -159,6 +145,7 @@ def average_spectra(fxs, fys):
         intersecting[:, i] = fy[indx]
 
     return x_intersect, num.mean(intersecting, 1)
+'''
 
 def extract(fxfy, upper_lim=0., lower_lim=99999.):
     indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
@@ -444,12 +431,16 @@ class SyntheticCouple():
                 ax.plot(xs[i], ys[i], color=c, alpha=0.2)
             ax.set_xlabel('f[Hz]')
             ax.set_ylabel('log(A1/A2)')
-            ax.text(0.02,0.02, 'std deviation(Q)=%1.2f' % std_q, transform=ax.transAxes)
             cb = plt.colorbar(s_m)
             cb.set_label('Q')
             ax = fig.add_subplot(3, 2, 5)
-            ax.hist(Qs, bins=20)
-            ax.set_xlim([-10000., 10000.])
+            v_range = 200
+            ax.hist(num.array(Qs)[num.where(num.abs(Qs)<=v_range)], bins=25)
+            ax.set_xlim([-120., 120.])
+            med = num.median(Qs)
+            ax.text(0.01, 0.99, 'median: %1.1f\n $\sigma$: %1.1f' %(med, std_q),
+                    verticalalignment='top', horizontalalignment='left',
+                    transform=ax.transAxes)
             ax.set_ylabel('Count')
             ax.set_xlabel('Q')
         ax = fig.add_subplot(3, 2, 6)
@@ -477,7 +468,6 @@ class SyntheticCouple():
         return self.spectra
 
     def q_scherbaum(self, phasestr):
-
         sources, targets, fxfy = self.spectra.as_lists()
         dists = num.zeros(len(sources))
         arrivals = num.zeros(len(sources))
@@ -573,6 +563,7 @@ def spectral_ratio(pair, fmin, fmax):
     fy_ratio = fy[0][ind0]/fy[1][ind1]
     return fx[0][ind0], fy_ratio
 
+
 class QInverter:
     def __init__(self, couples):
         self.couples = couples
@@ -584,7 +575,6 @@ class QInverter:
             slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             dt = couple.delta_onset()
             Q = -1.*num.pi*dt/slope
-            #self.ratios.append((dt, fx, slope, interc, num.log(fy_ratio), Q))
             couple.invert_data = (dt, fx, slope, interc, num.log(fy_ratio), Q)
 
     def plot(self, ax=None):
@@ -592,6 +582,30 @@ class QInverter:
         for couple in self.couples:
             dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
             ax.plot(fx, interc+slope*fx)
+
+
+def model_plot(mod, ax=None, parameter='qp', cmap='copper'):
+    cmap = mpl.cm.get_cmap(cmap)
+    ax = ax_if_needed(ax)
+    xlims = ax.get_xlim()
+    x, z = num.meshgrid(xlims, mod.profile('z'))
+    p = num.repeat(mod.profile(parameter), len(xlims)).reshape(x.shape)
+    contour = ax.contourf(x, z, p, cmap=cmap, alpha=0.5)
+    plt.colorbar(contour)
+
+
+def location_plots(tracers, colors=None, background_model=None):
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+
+    for tr in tracers:
+        arrival = tr.arrival()
+        z, x, t = arrival.zxt_path_subdivided()
+        ax.plot( x[0].ravel()*cake.d2m, z[0].ravel(), color=colors[tr])
+
+    model_plot(background_model, ax=ax)
+    plt.axes().set_aspect('equal', 'datalim')
+    ax.invert_yaxis()
 
 
 def noise_test():
@@ -654,7 +668,6 @@ def noise_test():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -749,7 +762,6 @@ def constant_qp_test():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -840,7 +852,6 @@ def qp_model_test():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -942,7 +953,6 @@ def sdr_test():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -1051,7 +1061,6 @@ def vp_model_test():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -1161,7 +1170,6 @@ def invert_test_1():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -1272,7 +1280,6 @@ def invert_test_2(noise_level=0.001):
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers)
 
@@ -1311,6 +1318,7 @@ def invert_test_2D(noise_level=0.001):
     builder = Builder(cache_dir='test-cache')
     #x_targets = num.array([20000.])
     x_targets = num.array([10000., 20000., 30000., 40000., 50000., 60000.])
+    #x_targets = num.array([50000.])
     y_targets = num.array([0.]*len(x_targets))
 
     lat = 50.2059
@@ -1325,13 +1333,13 @@ def invert_test_2D(noise_level=0.001):
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
     earthmodel = 'models/inv_test2_simple.nd'
-    component = 'z'
+    mod = cake.load_model(earthmodel)
+    component = 'v'
     target_kwargs = {'elevation': 0,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
     targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
-    print targets
     logger.info('Using %s targets' % (len(targets)))
 
     configs = []
@@ -1369,16 +1377,16 @@ def invert_test_2D(noise_level=0.001):
             pair = []
             for i_s, src in enumerate([s0, s1]):
                 config = qseis.QSeisConfigFull.example()
-                mod = cake.load_model(earthmodel)
                 config.id='C0%s' % (i_s)
                 config.time_region = [meta.Timing(-time_window/2.), meta.Timing(time_window/2.)]
                 config.time_window = time_window
                 config.nsamples = (sampling_rate*config.time_window)+1
                 config.earthmodel_1d = mod
                 config.source_mech = source_mech
+                #config.time_reduction_velocity *= 0.8
                 configs.append(config)
                 p_chopper = Chopper('first(p|P)',
-                                    fixed_length=1.,
+                                    fixed_length=0.2,
                                     phase_position=0.5,
                                     phaser=PhasePie(mod=mod))
                 tracer = Tracer(src, target, p_chopper, config=config,
@@ -1391,12 +1399,15 @@ def invert_test_2D(noise_level=0.001):
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers, snuffle=False)
+    colors = UniqueColor(tracers=tracers)
+
+    location_plots(tracers, colors=colors, background_model=mod)
 
     noise = RandomNoise(noise_level)
     testcouples = []
+
     for pair in pairs:
         testcouple = SyntheticCouple(master_slave=pair)
         testcouple.process(method=method,
@@ -1413,7 +1424,6 @@ def invert_test_2D(noise_level=0.001):
         noise_level: %s
         method: %s
         ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
-        colors = UniqueColor(tracers=tracers)
         testcouple.plot(infos=infos, colors=colors, noisy_Q=False)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
@@ -1439,7 +1449,7 @@ def qpqs():
     n_repeat = 100
     sources = []
     targets = []
-    method = 'mtspec'
+    method = 'pymutt'
     strike = 170.
     dip = 70.
     rake = -30.
@@ -1456,7 +1466,6 @@ def qpqs():
     tracers = []
     #source_depth_pairs = [(8*km, 10*km), (10*km, 12*km), (12*km, 14*km), (8*km, 14*km)]
     source_depth = 11.5*km
-    pairs = []
     #mod = cake.load_model('models/inv_test2.nd')
     mod = cake.load_model('models/constantall.nd')
     s0 = HaskellSourceWid(lat=float(lat),
@@ -1513,7 +1522,6 @@ def qpqs():
     qs = qseis.QSeisConfig()
     qs.qseis_version = '2006a'
     qs.sw_flat_earth_transform = 1
-    extra = {'qseis': qs}
 
     tracers = builder.build(tracers, snuffle=True)
     noise = RandomNoise(noise_level)
@@ -1548,7 +1556,7 @@ if __name__=='__main__':
     #qpqs()
     #invert_test_2()
     #invert_test_2(noise_level=0.00001)
-    invert_test_2D()
+    invert_test_2D(noise_level=0.00000001)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
