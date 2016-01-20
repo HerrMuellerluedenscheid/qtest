@@ -207,6 +207,9 @@ class Tracer:
     def onset(self):
         return self.chopper.onset(self.source, self.target)
 
+    def arrival(self):
+        return self.chopper.arrival(self.source, self.target)
+
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
@@ -269,8 +272,11 @@ class Chopper():
         '''only needed for method fft'''
         self.tfade = tfade
     
-    def onset(self, s, t):
-        return self.phase_pie.t(self.startphasestr, (s.depth, s.distance_to(t)))
+    def onset(self, *args, **kwargs):
+        return self.arrival(*args, **kwargs).t
+
+    def arrival(self, s, t):
+        return self.phase_pie.arrival(self.startphasestr, (s.depth, s.distance_to(t)))
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
