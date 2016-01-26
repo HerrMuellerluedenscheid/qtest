@@ -14,6 +14,7 @@ import time
 import argparse
 import logging
 import multiprocessing
+import progressbar
 
 pjoin = os.path.join
 
@@ -71,17 +72,23 @@ class Builder:
     def __init__(self, cache_dir=False):
         self.runners = []
         self.cache_dir = cache_dir
+        self.subdirs = os.listdir(self.cache_dir)
 
     def build(self, tracers, snuffle=False):
         ready = []
         need_work = []
-        for tr in tracers:
+        logger.info('scan cache....')
+        pb = progressbar.ProgressBar(maxval=len(tracers)).start()
+        for i_tr, tr in enumerate(tracers):
+
             found_cache = self.cache(tr, load=True)
             if not found_cache:
                 need_work.append(tr)
             else:
                 ready.append(tr)
-
+            pb.update(i_tr)
+        pb.finish()
+        logger.info('run %s tracers' % len(need_work))
         for tr, runner in parimap(self.work, need_work):
             tmpdir = runner.tempdir
             traces = self.load_seis(tmpdir, tr.config)
@@ -92,8 +99,13 @@ class Builder:
             del(runner)
 
         if snuffle:
+            traces = []
             for tracer in ready:
-                trace.snuffle(tracer.traces)
+                dist, z = tracer.get_geometry()
+                trs = [t.copy() for t in tracer.traces]
+                map(lambda x: x.set_codes(network='%2i-%2i'%(dist, z)), trs)
+                traces.extend(trs)
+            trace.snuffle(traces)
 
         return ready
 
@@ -107,10 +119,9 @@ class Builder:
         fn = 'traces.mseed'
         found_cache = False
         if self.cache_dir and load:
-            subdirs = os.listdir(self.cache_dir)
-            for sdir in subdirs:
+            for sdir in self.subdirs:
                 config = guts.load(filename=pjoin(self.cache_dir, sdir, configfn))
-                tr.config.regularize()
+                #tr.config.regularize()
                 file_path = pjoin(self.cache_dir, sdir, fn)
                 if str(config)==str(tr.config) and os.path.isfile(file_path):
                     tr.read_files(file_path)
@@ -210,6 +221,8 @@ class Tracer:
     def arrival(self):
         return self.chopper.arrival(self.source, self.target)
 
+    def get_geometry(self):
+        return self.source.distance_to(self.target), self.source.depth
 
 class Chopper():
     def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
@@ -246,8 +259,8 @@ class Chopper():
             print tstart
             print tend
         tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
-        taperer = trace.CosFader(xfrac=self.get_xfade())
-        tr.taper(taperer)
+        #taperer = trace.CosFader(xfrac=self.get_xfade())
+        #tr.taper(taperer)
         self.chopped.add(s,t,tr)
         return tr
 
