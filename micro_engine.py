@@ -117,20 +117,19 @@ class Builder:
         return tr, runner
 
     def load_configs(self):
-        config_str = []
+        config_str = {}
         for sdir in self.subdirs:
-            config_str.append(str(guts.load(filename=pjoin(self.cache_dir, sdir, self.configfn))))
+            config_str[str(guts.load(filename=pjoin(self.cache_dir, sdir,
+                                                    self.configfn)))] = sdir
         return config_str
 
     def cache(self, tr, load):
         fn = 'traces.mseed'
         found_cache = False
-        if self.cache_dir and load:
-            for sdir in self.subdirs:
-                file_path = pjoin(self.cache_dir, sdir, fn)
-                if str(tr.config) in self.config_str and os.path.isfile(file_path):
-                    tr.read_files(file_path)
-                    found_cache = True
+        if self.cache_dir and load and str(tr.config) in self.config_str.keys():
+            file_path = pjoin(self.cache_dir, self.config_str[str(tr.config)], fn)
+            tr.read_files(file_path)
+            found_cache = True
 
         elif self.cache_dir and not load:
             tmpdir = tempfile.mkdtemp(dir=self.cache_dir)
@@ -180,6 +179,7 @@ class Tracer:
         self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
         self.config.source_depth = source.depth/1000.
         self.config.id+= "_%s" % (self.source.id)
+        self.config.regularize()
 
     def read_files(self, dir):
         self.traces = io.load(dir)
