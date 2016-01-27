@@ -1138,10 +1138,11 @@ def invert_test_2D(noise_level=0.001):
 
 def invert_test_2D_parallel(noise_level=0.001):
     print '-------------------invert_test_2D -------------------------------'
-    builder = Builder(cache_dir='test-cache')
+    builder = Builder(cache_dir='cache-parallel')
     #builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
-    d1s = num.arange(5000., 40000., 120.)
+    #d1s = num.arange(5000., 50000., 300.)
+    d1s = num.linspace(5000., 50000., 6)
     z1 = 11.*km
     z2 = 13.*km
     d1 = 30000.
