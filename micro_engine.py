@@ -73,6 +73,8 @@ class Builder:
         self.runners = []
         self.cache_dir = cache_dir
         self.subdirs = os.listdir(self.cache_dir)
+        self.configfn='qseis-config.yaml'
+        self.config_str = self.load_configs()
 
     def build(self, tracers, snuffle=False):
         ready = []
@@ -114,22 +116,25 @@ class Builder:
         runner.run(config=tr.config)
         return tr, runner
 
+    def load_configs(self):
+        config_str = []
+        for sdir in self.subdirs:
+            config_str.append(str(guts.load(filename=pjoin(self.cache_dir, sdir, self.configfn))))
+        return config_str
+
     def cache(self, tr, load):
-        configfn='qseis-config.yaml'
         fn = 'traces.mseed'
         found_cache = False
         if self.cache_dir and load:
             for sdir in self.subdirs:
-                config = guts.load(filename=pjoin(self.cache_dir, sdir, configfn))
-                #tr.config.regularize()
                 file_path = pjoin(self.cache_dir, sdir, fn)
-                if str(config)==str(tr.config) and os.path.isfile(file_path):
+                if str(tr.config) in self.config_str and os.path.isfile(file_path):
                     tr.read_files(file_path)
                     found_cache = True
 
         elif self.cache_dir and not load:
             tmpdir = tempfile.mkdtemp(dir=self.cache_dir)
-            tr.config.dump(filename=pjoin(tmpdir, configfn))
+            tr.config.dump(filename=pjoin(tmpdir, self.configfn))
             io.save(tr.traces, pjoin(tmpdir, fn))
             logger.info('cached under: %s' % self.cache_dir)
         return found_cache
