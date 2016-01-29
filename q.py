@@ -1143,8 +1143,20 @@ def invert_test_2D_parallel(noise_level=0.001):
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.arange(5000., 50000., 300.)
     d1s = num.linspace(5000., 50000., 6)
-    z1 = 11.*km
-    z2 = 13.*km
+    ##### ready
+    #z1 = 10.*km
+    #z2 = 14.*km
+    #z1 = 11.*km
+    #z2 = 13.*km
+    #z1 = 12.4*km
+    #z2 = 12.8*km
+    z1 = 12.5*km
+    z2 = 12.6*km
+    ############
+    #z1 = 11.*km
+    #z2 = 13.*km
+    #z1 = 12.*km
+    #z2 = 12.1*km
     d1 = 30000.
     d2s = d1s*z2/z1
     #x_targets = num.array([d1, d2])
@@ -1154,7 +1166,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     lon = 12.5152
     sampling_rate = 500.
     #sampling_rate = 20.
-    time_window = 20.
+    time_window = 24.
     n_repeat = 100
     sources = []
     method = 'mtspec'
@@ -1164,10 +1176,12 @@ def invert_test_2D_parallel(noise_level=0.001):
     rake = -30.
     fmin = 50.
     fmax = 100.
-    source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
-    #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
-    #source_mech.m_dc *= 1E10
-    earthmodel = 'models/inv_test2_simple.nd'
+    #source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+    source_mech.m_dc *= 1E10
+    #earthmodel = 'models/inv_test2_simple.nd'
+    #earthmodel = 'models/inv_test3.nd'
+    earthmodel = 'models/inv_test6.nd'
     #earthmodel = 'models/constantall.nd'
     mod = cake.load_model(earthmodel)
     component = 'r'
@@ -1226,8 +1240,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     qs.sw_flat_earth_transform = 1
 
     colors = UniqueColor(tracers=tracers)
-    location_plots(tracers, colors=colors, background_model=mod)
-    plt.show()
+    #location_plots(tracers, colors=colors, background_model=mod)
     tracers = builder.build(tracers, snuffle=False)
     noise = RandomNoise(noise_level)
     testcouples = []
