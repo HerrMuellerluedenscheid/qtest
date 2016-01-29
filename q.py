@@ -373,6 +373,9 @@ class SyntheticCouple():
                 xs.append(fxs[i])
                 ys.append(interc+fxs[i]*slope)
                 ys_ratio.append(num.log(fy_ratios[i]))
+            if len(Qs)<2:
+                ax.text(0.5, 0.5, 'Too few Qs', transform=ax.transAxes)
+                return
 
             std_q = num.std(Qs)
             maxQ = max(Qs)
@@ -557,7 +560,7 @@ def model_plot(mod, ax=None, parameter='qp', cmap='copper'):
     plt.colorbar(contour)
 
 
-def location_plots(tracers, colors=None, background_model=None):
+def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     fig = plt.figure()
     ax = fig.add_subplot(111)
     print 'plotting locations'
@@ -567,7 +570,7 @@ def location_plots(tracers, colors=None, background_model=None):
         z, x, t = arrival.zxt_path_subdivided()
         ax.plot( x[0].ravel()*cake.d2m, z[0].ravel(), color=colors[tr])
 
-    model_plot(background_model, ax=ax)
+    model_plot(background_model, ax=ax, parameter=parameter)
     plt.axes().set_aspect('equal', 'datalim')
     ax.invert_yaxis()
 
@@ -1162,13 +1165,14 @@ def invert_test_2D_parallel(noise_level=0.001):
     strike = 170.
     dip = 70.
     rake = -30.
-    fmin = 50.
-    fmax = 100.
-    source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
-    #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
-    #source_mech.m_dc *= 1E10
-    earthmodel = 'models/inv_test2_simple.nd'
+    fmin = 10.
+    fmax = 45.
+    #source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
+    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+    source_mech.m_dc *= 1E10
     #earthmodel = 'models/constantall.nd'
+    #earthmodel = 'models/inv_test2_simple.nd'
+    earthmodel = 'models/inv_test5.nd'
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
@@ -1226,7 +1230,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     qs.sw_flat_earth_transform = 1
 
     colors = UniqueColor(tracers=tracers)
-    location_plots(tracers, colors=colors, background_model=mod)
+    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     plt.show()
     tracers = builder.build(tracers, snuffle=False)
     noise = RandomNoise(noise_level)
@@ -1237,9 +1241,9 @@ def invert_test_2D_parallel(noise_level=0.001):
         testcouple.process(method=method, repeat=n_repeat, noise=noise)
         testcouples.append(testcouple)
         infos = '''
-        Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n dist_x: %s\n dist_y: %s
+        Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n 
         noise_level: %s\nmethod: %s
-        ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
+        ''' % (strike, dip, rake, sampling_rate, noise_level, method)
         testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
