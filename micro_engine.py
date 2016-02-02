@@ -72,22 +72,25 @@ class Builder:
     def __init__(self, cache_dir=False):
         self.runners = []
         self.cache_dir = cache_dir
-        self.subdirs = os.listdir(self.cache_dir)
         self.configfn='qseis-config.yaml'
-        self.config_str = self.load_configs()
+        if self.cache_dir:
+            self.subdirs = os.listdir(self.cache_dir)
+            self.config_str = self.load_configs()
+        else:
+            self.subdirs = None
 
-    def build(self, tracers, snuffle=False):
+    def build(self, tracers, engine=None, snuffle=False):
         ready = []
         need_work = []
         logger.info('scan cache....')
         pb = progressbar.ProgressBar(maxval=len(tracers)).start()
         for i_tr, tr in enumerate(tracers):
-
-            found_cache = self.cache(tr, load=True)
-            if not found_cache:
-                need_work.append(tr)
-            else:
+            if tr.setup_from_engine(engine):
                 ready.append(tr)
+            elif self.cache(tr, load=True):
+                ready.append(tr)
+            else:
+                need_work.append(tr)
             pb.update(i_tr)
         pb.finish()
         logger.info('run %s tracers' % len(need_work))
@@ -175,14 +178,25 @@ class Tracer:
         self.kwargs = kwargs
         self.component = component
 
-        self.config.receiver_distances = [source.distance_to(target)/1000.]
-        self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
-        self.config.source_depth = source.depth/1000.
-        self.config.id+= "_%s" % (self.source.id)
-        self.config.regularize()
+        if not self.target.store_id:
+            self.config.receiver_distances = [source.distance_to(target)/1000.]
+            self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
+            self.config.source_depth = source.depth/1000.
+            self.config.id+= "_%s" % (self.source.id)
+            #self.config.id = ""
+            self.config.regularize()
 
     def read_files(self, dir):
         self.traces = io.load(dir)
+
+    def setup_from_engine(self, engine=None):
+        if engine and self.target.store_id:
+            response = engine.process(sources=[self.source], targets=[self.target])
+            self.traces = response.pyrocko_traces()
+            #self.traces = rotate_rtz(self.traces)
+            self.config = engine.get_store_config(self.target.store_id)
+            return True
+        return
 
     def process(self, **pp_kwargs):
         tr = self.processed_cache.get(self.component, False)
@@ -251,7 +265,6 @@ class Chopper():
         else:
             raise Exception('Need to define exactly one of endphasestr and fixed length')
         tr_bkp = tr
-        logger.info('lowpass filter with 0.5/nyquist')
         tr = tr.copy()
         tr.set_location('cp')
         trange = tend-tstart

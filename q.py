@@ -4,7 +4,8 @@ mpl.rc('ytick', labelsize=8)
 mpl.rc('xtick', labelsize=8)
 
 import copy
-from pyrocko.gf import meta, DCSource, RectangularSource, Target
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
+from pyrocko.gf import ExplosionSource
 from pyrocko.guts import String
 from pyrocko import orthodrome
 from pyrocko import cake
@@ -362,7 +363,6 @@ class SyntheticCouple():
             ys_ratio = []
             for i in xrange(len(fxs)):
                 slope, interc, r_value, p_value, stderr = linregress(fxs[i], num.log(fy_ratios[i]))
-                print slope
                 dt = self.delta_onset()
                 Q = -1.*num.pi*dt/slope
                 if num.abs(Q)>10000:
@@ -535,13 +535,20 @@ class QInverter:
         self.couples = couples
 
     def invert(self):
+        allqs = []
         self.ratios = []
-        for couple in self.couples:
+        for i_c, couple in enumerate(self.couples):
+            print '%s/%s' %(i_c+1, len(self.couples))
             fx, fy_ratio = spectral_ratio(couple)
             slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             dt = couple.delta_onset()
-            Q = -1.*num.pi*dt/slope
+            Q = num.pi*dt/slope
+            if num.isnan(Q):
+                logger.warn('Q is nan')
+                continue
             couple.invert_data = (dt, fx, slope, interc, num.log(fy_ratio), Q)
+            allqs.append(Q)
+        print 'finally ', num.mean(allqs), num.std(allqs)
 
     def plot(self, ax=None):
         ax = ax_if_needed(ax)
@@ -1153,8 +1160,8 @@ def invert_test_2D_parallel(noise_level=0.001):
     #z2 = 13.*km
     #z1 = 12.4*km
     #z2 = 12.8*km
-    z1 = 12.5*km
-    z2 = 12.6*km
+    z1 = 13.*km
+    z2 = 14.*km
     ############
     #z1 = 11.*km
     #z2 = 13.*km
@@ -1169,7 +1176,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     lon = 12.5152
     sampling_rate = 500.
     #sampling_rate = 20.
-    time_window = 24.
+    time_window = 23.
     n_repeat = 100
     sources = []
     method = 'mtspec'
@@ -1177,14 +1184,14 @@ def invert_test_2D_parallel(noise_level=0.001):
     strike = 170.
     dip = 70.
     rake = -30.
-    fmin = 10.
-    fmax = 45.
+    fmin = 20.
+    fmax = 80.
     #source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
     source_mech.m_dc *= 1E10
     #earthmodel = 'models/constantall.nd'
     #earthmodel = 'models/inv_test2_simple.nd'
-    earthmodel = 'models/inv_test5.nd'
+    earthmodel = 'models/inv_test6.nd'
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
@@ -1195,7 +1202,7 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     tracers = []
     source_depths = [z1, z2]
-    p_chopper = Chopper('first(p|P)', fixed_length=0.2, phase_position=0.5,
+    p_chopper = Chopper('first(p|P)', fixed_length=0.6, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
 
     sources = [HaskellSourceWid(lat=float(lat),
@@ -1266,12 +1273,107 @@ def invert_test_2D_parallel(noise_level=0.001):
     plt.show()
 
 
+def dbtest(noise_level=0.001):
+    print '-------------------db test-------------------------------'
+    builder = Builder()
+    lat = 50.2059
+    lon = 12.5152
+    n_repeat = 10
+    sources = []
+    method = 'mtspec'
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    fmin = 10.
+    fmax = 40.
+
+    store_id = 'qplayground_30000m'
+
+    engine = LocalEngine(store_superdirs=['/data/stores'])
+    store = engine.get_store(store_id)
+    config = engine.get_store_config(store_id)
+    mod = config.earthmodel_1d
+    component = 'Z'
+    target_kwargs = {
+        'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
+    targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+    p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
+                        phaser=PhasePie(mod=mod))
+    tracers = []
+    source_depths = num.arange(10100, 14000, 200)
+    distances = num.arange(28000., 32000., 200)
+
+    #source_depths = num.arange(config.source_depth_min,
+    #                           config.source_depth_max+config.source_depth_delta,
+    #                           config.source_depth_delta*4)
+    #distances = num.arange(config.distance_min,
+    #                       config.distance_max+config.distance_delta,
+    #                       config.distance_delta*4)
+
+    #sources = [DCSource(lat=float(lat), lon=float(lon), depth=sd, strike=strike,
+    #               dip=dip, rake=rake, magnitude=1.5) for sd in source_depths]
+    sources = []
+    for d in distances:
+        sources.extend([ExplosionSource(
+            lat=float(lat),
+            lon=float(lon),
+            depth=sd,
+            magnitude=0.,
+            north_shift=d) for sd in source_depths])
+
+    from distance_point2line import process as event_pairing
+    from distance_point2line import plot_segments, get_3d_ax, filter_pairs
+
+    ### Should use die Pie here:
+    pairs_by_rays = event_pairing(sources, targets, mod, cake.PhaseDef('p'))
+
+    pairs_by_rays = filter_pairs(pairs_by_rays, 10, 2000)
+    fig, ax = get_3d_ax()
+    for i_r, r in enumerate(pairs_by_rays):
+        print i_r, len(pairs_by_rays)
+        s, e1, e2, segments = r
+        plot_segments(segments, ax=ax)
+    plt.show()
+    pairs = []
+    for r in pairs_by_rays:
+        t, s1, s2, segments = r
+        tracer1 = Tracer(s1, t, p_chopper, component=component)
+        tracer2 = Tracer(s2, t, p_chopper, component=component)
+        pair = [tracer1, tracer2]
+        tracers.extend(pair)
+        pairs.append(pair)
+
+    tracers = builder.build(tracers, engine=engine, snuffle=False)
+    colors = UniqueColor(tracers=tracers)
+    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    noise = RandomNoise(noise_level)
+    testcouples = []
+
+    for pair in pairs:
+        testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax)
+        testcouple.process(method=method, repeat=n_repeat, noise=noise)
+        testcouples.append(testcouple)
+        infos = '''
+        Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n 
+        noise_level: %s\nmethod: %s
+        ''' % (strike, dip, rake, config.sample_rate, noise_level, method)
+        #testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
+    outfn = 'testimage'
+    plt.gcf().savefig('output/%s.png' % outfn)
+    testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
+    inverter = QInverter(couples=testcouples)
+    inverter.invert()
+    inverter.plot()
+    plt.show()
+
+
 if __name__=='__main__':
     #invert_test_1()
     #qpqs()
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
-    invert_test_2D_parallel(noise_level=0.0000001)
+    #invert_test_2D_parallel(noise_level=0.0000001)
+    dbtest(noise_level=0.00000001)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
