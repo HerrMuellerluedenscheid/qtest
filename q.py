@@ -5,6 +5,7 @@ mpl.rc('xtick', labelsize=8)
 
 import copy
 import progressbar
+import multiprocessing
 from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
 from pyrocko.gf import ExplosionSource
 from pyrocko.guts import String
@@ -283,7 +284,9 @@ class UniqueColor():
 
 
 class SyntheticCouple():
-    def __init__(self, master_slave, fmin=-9999, fmax=9999):
+    def __init__(self, master_slave, fmin=-9999, fmax=9999, method='mtspec'):
+        check_method(method)
+        self.method = method
         self.master_slave = master_slave
         self.fmin = fmin
         self.fmax = fmax
@@ -295,20 +298,20 @@ class SyntheticCouple():
         self.repeat = 1
         self.noise_level = 0
 
-    def process(self, method='mtspec', **pp_kwargs):
-        self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
-        self.repeat = pp_kwargs.pop('repeat', self.repeat)
-        check_method(method)
+    def process(self, **pp_kwargs):
         for tracer in self.master_slave:
+            self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
+            self.repeat = pp_kwargs.pop('repeat', self.repeat)
             tr = tracer.process(**pp_kwargs)
-            f, a = self.get_spectrum(tr, method, tracer.chopper)
+            f, a = self.get_spectrum(tr, self.method, tracer.chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
             for i in xrange(self.repeat):
-                tr = tracer.process(**pp_kwargs).copy()
+                #tr = tracer.process(**pp_kwargs).copy()
+                tr = tracer.process(**pp_kwargs)
                 tr_noise = add_noise(tr, level=self.noise_level)
-                f, a = self.get_spectrum(tr_noise, method, tracer.chopper)
+                f, a = self.get_spectrum(tr_noise, self.method, tracer.chopper)
                 fxfy = num.vstack((f,a))
                 self.noisy_spectra.spectra.append((tracer, fxfy))
 
@@ -579,12 +582,12 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     ax = fig.add_subplot(111)
     widgets = ['plotting model and rays: ', progressbar.Percentage(), progressbar.Bar()]
     pb = progressbar.ProgressBar(maxval=len(tracers)-1, widgets=widgets).start()
-
     for itr, tr in enumerate(tracers):
         pb.update(itr)
         arrival = tr.arrival()
         z, x, t = arrival.zxt_path_subdivided()
-        ax.plot( x[0].ravel()*cake.d2m, z[0].ravel(), color=colors[tr])
+        x = x[0].ravel()*cake.d2m
+        ax.plot(x, z[0].ravel(), color=colors[tr])
         minx[itr] = num.min(x)
         maxx[itr] = num.max(x)
     pb.finish()
@@ -592,7 +595,6 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     maxx = max(maxx.min(), 100)+100
     xlims=(minx, maxx)
     model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
-    #plt.axes().set_aspect('equal', 'datalim')
     ax.set_xlim(xlims)
     ax.invert_yaxis()
 
@@ -1164,6 +1166,11 @@ def invert_test_2D(noise_level=0.001):
     plt.show()
 
 
+def process_couple(args):
+    testcouple, n_repeat, noise = args
+    testcouple.process(repeat=n_repeat, noise=noise)
+    return testcouple
+
 
 def invert_test_2D_parallel(noise_level=0.001):
     print '-------------------invert_test_2D -------------------------------'
@@ -1171,7 +1178,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     #builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.arange(5000., 50000., 300.)
-    d1s = num.linspace(10., 50000., 6)[2:]
+    d1s = num.linspace(1000., 100000., 16)[2:]
     ##### ready
     #z1 = 10.*km
     #z2 = 14.*km
@@ -1186,8 +1193,11 @@ def invert_test_2D_parallel(noise_level=0.001):
     #z2 = 13.*km
     #z1 = 12.*km
     #z2 = 12.1*km
-    d1 = 30000.
-    d2s = d1s*z2/z1
+
+    #if True:
+    #    d2s = d1s*z2/z1
+    parallel = True
+
     #x_targets = num.array([d1, d2])
     #y_targets = num.array([0.]*len(x_targets))
 
@@ -1240,8 +1250,13 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     for i in xrange(len(d1s)):
         print("%s/%s" %(i, len(d1s)))
-        d1 = d1s[i]
-        d2 = d1*z2/z1
+        if parallel:
+            d1 = d1s[i]
+            d2 = d1*z2/z1
+        else:
+            d1 = d1s[i]
+            d2 = d1
+
         targets = xy2targets([d1, d2], [0., 0.], lat, lon, 'Z',  **target_kwargs)
         pair = []
         for itarget, target in enumerate(targets):
@@ -1268,16 +1283,23 @@ def invert_test_2D_parallel(noise_level=0.001):
     qs.sw_flat_earth_transform = 1
 
     colors = UniqueColor(tracers=tracers)
-    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    plt.show()
+    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    #plt.show()
     tracers = builder.build(tracers, snuffle=False)
     noise = RandomNoise(noise_level)
     testcouples = []
-
     for pair in pairs:
         testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax)
-        testcouple.process(method=method, repeat=n_repeat, noise=noise)
         testcouples.append(testcouple)
+
+    #pool = multiprocessing.Pool()
+    args = [(tc, n_repeat, noise) for tc in testcouples]
+    for arg in args:
+        process_couple(arg)
+    print 'Fix parallel version'
+    #pool.map(process_couple, args)
+
+    for testcouple in testcouples:
         infos = '''
         Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n 
         noise_level: %s\nmethod: %s
@@ -1395,7 +1417,7 @@ if __name__=='__main__':
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     invert_test_2D_parallel(noise_level=0.01)
-    dbtest(noise_level=0.00000001)
+    #dbtest(noise_level=0.00000001)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()

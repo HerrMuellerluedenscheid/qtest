@@ -210,7 +210,7 @@ class Tracer:
         if normalize:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
         if response:
-            tr1 = tr.copy()
+            #tr1 = tr.copy()
             #tr = tr.transfer(transfer_function=response)
             tr = response.convolve(tr)
             #trace.snuffle([tr1, tr])
