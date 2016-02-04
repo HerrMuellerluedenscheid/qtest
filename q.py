@@ -486,6 +486,12 @@ class SyntheticCouple():
             intersecting_slave, average_spectrum_slave = fx_slave[0], fy_slave[0]
         return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
 
+    def get_target_distances_and_depths(self):
+        ms = self.master_slave
+        d1 = ms[0].target.distance_to(ms[0].source)
+        d2 = ms[1].target.distance_to(ms[1].source)
+        return d1, d2, ms[0].source.depth, ms[1].source.depth
+
 def limited_frequencies_ind(fmin, fmax, f):
     return num.where(num.logical_and(f>=fmin, f<=fmax))
 
@@ -573,12 +579,13 @@ def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     x, z = num.meshgrid(xlims, mod.profile('z'))
     p = num.repeat(mod.profile(parameter), len(xlims)).reshape(x.shape)
     contour = ax.contourf(x, z, p, cmap=cmap, alpha=0.5)
-    plt.colorbar(contour)
+    #plt.colorbar(contour)
 
 
 def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(5,4))
     minx, maxx = num.zeros(len(tracers)), num.zeros(len(tracers))
+    miny, maxy = num.zeros(len(tracers)), num.zeros(len(tracers))
     ax = fig.add_subplot(111)
     widgets = ['plotting model and rays: ', progressbar.Percentage(), progressbar.Bar()]
     pb = progressbar.ProgressBar(maxval=len(tracers)-1, widgets=widgets).start()
@@ -590,12 +597,20 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
         ax.plot(x, z[0].ravel(), color=colors[tr])
         minx[itr] = num.min(x)
         maxx[itr] = num.max(x)
+        miny[itr] = num.min(z)
+        maxy[itr] = num.max(z)
     pb.finish()
     minx = min(minx.min(), -100)-100
-    maxx = max(maxx.min(), 100)+100
+    maxx = max(maxx.max(), 100)+100
+    miny = min(miny.min(), -100)-100
+    maxy = max(maxy.max(), 100)+100
     xlims=(minx, maxx)
+    ylims=(miny, maxy)
     model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
     ax.set_xlim(xlims)
+    ax.set_ylim(ylims)
+    ax.set_xlabel('Distance [m]')
+    ax.set_ylabel('Depth [m]')
     ax.invert_yaxis()
 
 def qp_model_test():
@@ -1283,8 +1298,10 @@ def invert_test_2D_parallel(noise_level=0.001):
     qs.sw_flat_earth_transform = 1
 
     colors = UniqueColor(tracers=tracers)
-    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    #plt.show()
+    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    fig = plt.gcf()
+    fig.savefig('locations_model_parallel%s.png'%parallel)
+    plt.show()
     tracers = builder.build(tracers, snuffle=False)
     noise = RandomNoise(noise_level)
     testcouples = []
