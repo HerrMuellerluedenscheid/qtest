@@ -4,14 +4,16 @@ mpl.rc('ytick', labelsize=8)
 mpl.rc('xtick', labelsize=8)
 
 import copy
-from pyrocko.gf import meta, DCSource, RectangularSource, Target
+import progressbar
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
+from pyrocko.gf import ExplosionSource
 from pyrocko.guts import String
 from pyrocko import orthodrome
 from pyrocko import cake
 from pyrocko.fomosto import qseis
 from pyrocko.trace import nextpow2
 from collections import defaultdict
-from scipy.stats import linregress
+from scipy.stats import linregress, norm
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
@@ -104,15 +106,20 @@ def infos(ax, info_string):
     ax.text(0., 0, info_string, transform=ax.transAxes)
 
 
-def plot_locations(items):
+def plot_locations(items, use_effective_latlon=False):
     f = plt.figure(figsize=(3,3))
     ax = f.add_subplot(111)
     lats = []
     lons = []
     for item in items:
         ax.plot(item.lon, item.lat, 'og')
-        lats.append(item.lat)
-        lons.append(item.lon)
+        if use_effective_latlon:
+            lat, lon = item.effective_latlon
+        else:
+            lat = item.lat
+            lon = item.lon
+        lats.append(lat)
+        lons.append(lon)
 
     ax.plot(num.mean(lons), num.mean(lats), 'xg')
     ax.set_title('locations')
@@ -136,26 +143,18 @@ def intersect_all(*args):
             except IndexError:
                 return inters
 
-'''
-def average_spectra(fxs, fys):
-    x_intersect = intersect_all(*fxs)
-    intersecting = num.zeros((len(x_intersect), len(fys)))
-    for i, fy in enumerate(fys):
-        indx = num.where(fxs[i]==x_intersect)
-        intersecting[:, i] = fy[indx]
-
-    return x_intersect, num.mean(intersecting, 1)
-'''
 
 def extract(fxfy, upper_lim=0., lower_lim=99999.):
     indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
     indx = num.array(indx)
     return fxfy[:, indx].reshape(2, len(indx.T))
 
+
 class DCSourceWid(DCSource):
     store_id = String.T(optional=True, default=None)
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
+
 
 class HaskellSourceWid(RectangularSource):
     #store_id = String.T(optional=True, default=None)
@@ -173,14 +172,10 @@ class HaskellSourceWid(RectangularSource):
     def is_slave(self):
         return self.attitude=='slave'
 
-# Eine station aus dem webnet
-# KVC
-
-def linear_fit(x, y, m):
-    return y+m*x
 
 def exp_fit(x, y, m):
     return num.exp(y - m*x)
+
 
 def spectralize(tr, method, chopper=None):
     if method=='fft':
@@ -204,6 +199,7 @@ def spectralize(tr, method, chopper=None):
         a = num.sqrt(a)
 
     return f, a
+
 
 def slope_histogram(ax, spectra, colors):
     slopes = defaultdict(list)
@@ -332,7 +328,7 @@ class SyntheticCouple():
                        label=tracer.config.id,
                        color=colors[tracer],
                        ax=ax,
-                       parameters=kwargs.get('parameters', ['qp', 'qs']))
+                       parameters=kwargs.get('parameters', ['qp']))
 
         #ax.set_xlim((ax.get_xlim()[0]*0.9,
         #             ax.get_xlim()[1]*1.1))
@@ -362,7 +358,6 @@ class SyntheticCouple():
             ys_ratio = []
             for i in xrange(len(fxs)):
                 slope, interc, r_value, p_value, stderr = linregress(fxs[i], num.log(fy_ratios[i]))
-                print slope
                 dt = self.delta_onset()
                 Q = -1.*num.pi*dt/slope
                 if num.abs(Q)>10000:
@@ -535,25 +530,43 @@ class QInverter:
         self.couples = couples
 
     def invert(self):
+        self.allqs = []
         self.ratios = []
-        for couple in self.couples:
+        self.p_values = []
+        self.stderrs = []
+        widgets = ['regression analysis', progressbar.Percentage(), progressbar.Bar()]
+        pb = progressbar.ProgressBar(maxval=len(self.couples)-1, widgets=widgets).start()
+        for i_c, couple in enumerate(self.couples):
+            pb.update(i_c)
             fx, fy_ratio = spectral_ratio(couple)
             slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             dt = couple.delta_onset()
-            Q = -1.*num.pi*dt/slope
+            Q = -1*num.pi*dt/slope
+            if num.isnan(Q):
+                logger.warn('Q is nan')
+                continue
             couple.invert_data = (dt, fx, slope, interc, num.log(fy_ratio), Q)
+            self.allqs.append(Q)
+            self.p_values.append(p_value)
+            self.stderrs.append(stderr)
+        pb.finish()
 
-    def plot(self, ax=None):
-        ax = ax_if_needed(ax)
-        for couple in self.couples:
-            dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
-            ax.plot(fx, interc+slope*fx)
+    def plot(self, ax=None, q_threshold=999999.):
+        fig, axs = plt.subplots(2,1)
+        median = num.median(self.allqs)
+        filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
+        axs[0].hist(filtered, bins=100)
+        txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
+        axs[0].text(0.01, 0.99, txt, transform=axs[0].transAxes, horizontalalignment='left', verticalalignment='top')
+        axs[1].plot(norm.pdf(filtered), '-r', label='pdf')
+        #for couple in self.couples:
+        #   dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
+        #   ax.plot(fx, interc+slope*fx)
 
 
-def model_plot(mod, ax=None, parameter='qp', cmap='copper'):
+def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     cmap = mpl.cm.get_cmap(cmap)
     ax = ax_if_needed(ax)
-    xlims = ax.get_xlim()
     x, z = num.meshgrid(xlims, mod.profile('z'))
     p = num.repeat(mod.profile(parameter), len(xlims)).reshape(x.shape)
     contour = ax.contourf(x, z, p, cmap=cmap, alpha=0.5)
@@ -562,16 +575,25 @@ def model_plot(mod, ax=None, parameter='qp', cmap='copper'):
 
 def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     fig = plt.figure()
+    minx, maxx = num.zeros(len(tracers)), num.zeros(len(tracers))
     ax = fig.add_subplot(111)
-    print 'plotting locations'
+    widgets = ['plotting model and rays: ', progressbar.Percentage(), progressbar.Bar()]
+    pb = progressbar.ProgressBar(maxval=len(tracers)-1, widgets=widgets).start()
+
     for itr, tr in enumerate(tracers):
-        print '%s/%s' %(itr, len(tracers))
+        pb.update(itr)
         arrival = tr.arrival()
         z, x, t = arrival.zxt_path_subdivided()
         ax.plot( x[0].ravel()*cake.d2m, z[0].ravel(), color=colors[tr])
-
-    model_plot(background_model, ax=ax, parameter=parameter)
-    plt.axes().set_aspect('equal', 'datalim')
+        minx[itr] = num.min(x)
+        maxx[itr] = num.max(x)
+    pb.finish()
+    minx = min(minx.min(), -100)-100
+    maxx = max(maxx.min(), 100)+100
+    xlims=(minx, maxx)
+    model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
+    #plt.axes().set_aspect('equal', 'datalim')
+    ax.set_xlim(xlims)
     ax.invert_yaxis()
 
 def qp_model_test():
@@ -892,7 +914,7 @@ def invert_test_1():
     inverter.invert(fmin=50, fmax=200)
     inverter.plot()
 
-def invert_test_2(noise_level=0.001):
+def invert_test_2(noise_level=0.01):
     print '-------------------invert_test_2-------------------------------'
     builder = Builder(cache_dir='test-cache')
     x_targets = num.array([10.])
@@ -900,9 +922,11 @@ def invert_test_2(noise_level=0.001):
 
     lat = 50.2059
     lon = 12.5152
+    fmin = 50
+    fmax = 180
     sampling_rate = 500
     time_window = 25
-    n_repeat = 100
+    n_repeat = 1000
     sources = []
     targets = []
     method = 'mtspec'
@@ -974,11 +998,14 @@ def invert_test_2(noise_level=0.001):
     qs.sw_flat_earth_transform = 1
 
     tracers = builder.build(tracers)
+    colors = UniqueColor(tracers=tracers)
+    location_plots(tracers, colors=colors, background_model=mod)
+    plt.show()
 
     noise = RandomNoise(noise_level)
     testcouples = []
     for pair in pairs:
-        testcouple = SyntheticCouple(master_slave=pair)
+        testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax)
         #testcouple.process(method='pymutt',
         testcouple.process(method=method,
                            #noise_level=0.1,
@@ -995,13 +1022,12 @@ def invert_test_2(noise_level=0.001):
         noise_level: %s
         method: %s
         ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
-        colors = UniqueColor(tracers=tracers)
         testcouple.plot(infos=infos, colors=colors, noisy_Q=True)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
 
     inverter = QInverter(couples=testcouples)
-    inverter.invert(fmin=50, fmax=200)
+    inverter.invert()
     inverter.plot()
     plt.show()
 
@@ -1029,8 +1055,8 @@ def invert_test_2D(noise_level=0.001):
     strike = 170.
     dip = 70.
     rake = -30.
-    fmin = 100.
-    fmax = 200.
+    fmin = 30.
+    fmax = 130.
     source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
     #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
     #source_mech.m_dc *= 1E10
@@ -1266,12 +1292,110 @@ def invert_test_2D_parallel(noise_level=0.001):
     plt.show()
 
 
+def dbtest(noise_level=0.001):
+    print '-------------------db test-------------------------------'
+    builder = Builder()
+    lat = 50.2059
+    lon = 12.5152
+    n_repeat = 10
+    sources = []
+    method = 'mtspec'
+    strike = 170.
+    dip = 70.
+    rake = -30.
+    fmin = 10.
+    fmax = 40.
+
+    store_id = 'qplayground_30000m'
+
+    engine = LocalEngine(store_superdirs=['/data/stores'])
+    store = engine.get_store(store_id)
+    config = engine.get_store_config(store_id)
+    mod = config.earthmodel_1d
+    component = 'Z'
+    target_kwargs = {
+        'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
+    targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+    p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
+                        phaser=PhasePie(mod=mod))
+    tracers = []
+    source_depths = num.arange(10100, 14000, 200)
+    distances = num.arange(28000., 32000., 200)
+
+    #source_depths = num.arange(config.source_depth_min,
+    #                           config.source_depth_max+config.source_depth_delta,
+    #                           config.source_depth_delta*4)
+    #distances = num.arange(config.distance_min,
+    #                       config.distance_max+config.distance_delta,
+    #                       config.distance_delta*4)
+
+    #sources = [DCSource(lat=float(lat), lon=float(lon), depth=sd, strike=strike,
+    #               dip=dip, rake=rake, magnitude=1.5) for sd in source_depths]
+    sources = []
+    for d in distances:
+        sources.extend([ExplosionSource(
+            lat=float(lat),
+            lon=float(lon),
+            depth=sd,
+            magnitude=0.,
+            north_shift=d) for sd in source_depths])
+
+    plot_locations(sources, use_effective_latlon=True)
+    plt.show()
+    from distance_point2line import process as event_pairing
+    from distance_point2line import plot_segments, get_3d_ax, filter_pairs
+    ### Should use die Pie here:
+    pairs_by_rays = event_pairing(sources, targets, mod, cake.PhaseDef('p'))
+
+    pairs_by_rays = filter_pairs(pairs_by_rays, 10, 2000)
+    fig, ax = get_3d_ax()
+    #widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
+    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    #for i_r, r in enumerate(pairs_by_rays):
+    #    s, e1, e2, segments = r
+    #    plot_segments(segments, ax=ax)
+    #    pb.update(i_r)
+    #pb.finish()
+    pairs = []
+    for r in pairs_by_rays:
+        t, s1, s2, segments = r
+        tracer1 = Tracer(s1, t, p_chopper, component=component)
+        tracer2 = Tracer(s2, t, p_chopper, component=component)
+        pair = [tracer1, tracer2]
+        tracers.extend(pair)
+        pairs.append(pair)
+
+    tracers = builder.build(tracers, engine=engine, snuffle=False)
+    colors = UniqueColor(tracers=tracers)
+    noise = RandomNoise(noise_level)
+    testcouples = []
+    widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
+    pb = progressbar.ProgressBar(maxval=len(pairs)-1, widgets=widgets).start()
+    for i_p, pair in enumerate(pairs):
+        pb.update(i_p)
+        testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax)
+        testcouple.process(method=method, repeat=n_repeat, noise=noise)
+        testcouples.append(testcouple)
+    pb.finish()
+    #outfn = 'testimage'
+    #plt.gcf().savefig('output/%s.png' % outfn)
+    testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
+    inverter = QInverter(couples=testcouples)
+    inverter.invert()
+    inverter.plot(q_threshold=500)
+    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    plt.show()
+
+
 if __name__=='__main__':
     #invert_test_1()
     #qpqs()
+    
+    # DIESER:
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     invert_test_2D_parallel(noise_level=0.01)
+    dbtest(noise_level=0.00000001)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
