@@ -1145,16 +1145,16 @@ def invert_test_2D_parallel(noise_level=0.001):
     #builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.arange(5000., 50000., 300.)
-    d1s = num.linspace(5000., 50000., 6)
+    d1s = num.linspace(10., 50000., 6)[2:]
     ##### ready
     #z1 = 10.*km
     #z2 = 14.*km
-    #z1 = 11.*km
-    #z2 = 13.*km
+    z1 = 11.*km
+    z2 = 13.*km
     #z1 = 12.4*km
     #z2 = 12.8*km
-    z1 = 12.5*km
-    z2 = 12.6*km
+    #z1 = 12.5*km
+    #z2 = 12.6*km
     ############
     #z1 = 11.*km
     #z2 = 13.*km
@@ -1170,21 +1170,21 @@ def invert_test_2D_parallel(noise_level=0.001):
     sampling_rate = 500.
     #sampling_rate = 20.
     time_window = 24.
-    n_repeat = 100
+    n_repeat = 1000
     sources = []
     method = 'mtspec'
     #method = 'pymutt'
     strike = 170.
     dip = 70.
     rake = -30.
-    fmin = 10.
-    fmax = 45.
-    #source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
-    source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
-    source_mech.m_dc *= 1E10
-    #earthmodel = 'models/constantall.nd'
+    fmin = 50.
+    fmax = 150.
+    source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
+    #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
+    #source_mech.m_dc *= 1E10
+    earthmodel = 'models/constantall.nd'
     #earthmodel = 'models/inv_test2_simple.nd'
-    earthmodel = 'models/inv_test5.nd'
+    #earthmodel = 'models/inv_test6.nd'
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
@@ -1195,7 +1195,7 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     tracers = []
     source_depths = [z1, z2]
-    p_chopper = Chopper('first(p|P)', fixed_length=0.2, phase_position=0.5,
+    p_chopper = Chopper('first(p|P)', fixed_length=0.4, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
 
     sources = [HaskellSourceWid(lat=float(lat),
@@ -1271,7 +1271,7 @@ if __name__=='__main__':
     #qpqs()
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
-    invert_test_2D_parallel(noise_level=0.0000001)
+    invert_test_2D_parallel(noise_level=0.01)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
