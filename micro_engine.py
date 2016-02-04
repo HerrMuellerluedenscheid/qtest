@@ -82,7 +82,7 @@ class Builder:
     def build(self, tracers, engine=None, snuffle=False):
         ready = []
         need_work = []
-        logger.info('scan cache....')
+        logger.info('prepare or load tracers....')
         pb = progressbar.ProgressBar(maxval=len(tracers)).start()
         for i_tr, tr in enumerate(tracers):
             if tr.setup_from_engine(engine):
@@ -298,11 +298,11 @@ class Chopper():
         for tstart, tend in times:
             trange = tstart-tend
             mintrange = trange if trange < mintrange else 99999.
-    
+
     def set_tfade(self, tfade):
         '''only needed for method fft'''
         self.tfade = tfade
-    
+
     def onset(self, *args, **kwargs):
         return self.arrival(*args, **kwargs).t
 

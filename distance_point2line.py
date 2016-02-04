@@ -287,7 +287,7 @@ def process(sources, targets, earthmodel, phases):
             try:
                 x, y, z = project2enz(arrival[0], e.azibazi_to(t)[0]) #ortho.azimuth(e, t))
             except IndexError as err:
-                print err
+                print 'Error> ', err
                 continue
             x = x * cake.d2m + east_m
             y = y * cake.d2m + north_m
