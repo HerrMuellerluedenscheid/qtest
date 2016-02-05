@@ -1197,21 +1197,14 @@ def invert_test_2D_parallel(noise_level=0.001):
     #builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.arange(5000., 50000., 300.)
-    d1s = num.linspace(1000., 100000., 16)[2:]
+    d1s = num.linspace(1000., 80000., 15)
     ##### ready
-    #z1 = 10.*km
-    #z2 = 14.*km
-    z1 = 11.*km
-    z2 = 13.*km
-    #z1 = 12.4*km
-    #z2 = 12.8*km
-    #z1 = 12.5*km
-    #z2 = 12.6*km
-    ############
     #z1 = 11.*km
     #z2 = 13.*km
-    #z1 = 12.*km
-    #z2 = 12.1*km
+    ###########
+    z1 = 12.5*km
+    z2 = 13.5*km
+    ############
 
     #if True:
     #    d2s = d1s*z2/z1
