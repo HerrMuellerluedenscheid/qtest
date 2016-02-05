@@ -319,12 +319,15 @@ class SyntheticCouple():
         return spectralize(tr, method, chopper)
 
     def plot(self, colors, **kwargs):
-        fig = plt.figure(figsize=(5, 6))
-        ax = fig.add_subplot(3, 2, 1)
+        fig = plt.figure(figsize=(3, 6))
+        ax = fig.add_subplot(4, 1, 2)
         self.spectra.plot_all(ax, colors=colors, legend=False, fmin=self.fmin,
                               fmax=self.fmax)
         self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.05, legend=False)
         #legend_clear_duplicates(ax)
+        
+        '''
+        # Q model right panel:
         ax = fig.add_subplot(3, 2, 2)
         for tracer in self.master_slave:
             plot_model(mod=tracer.config.earthmodel_1d,
@@ -332,30 +335,30 @@ class SyntheticCouple():
                        color=colors[tracer],
                        ax=ax,
                        parameters=kwargs.get('parameters', ['qp']))
-
         #ax.set_xlim((ax.get_xlim()[0]*0.9,
         #             ax.get_xlim()[1]*1.1))
         for tr in self.master_slave:
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
                        color=colors[tr])
+        '''
         #if not kwargs.get('no_legend', False):
         #    ax.legend()
-        ax = fig.add_subplot(3, 2, 3)
+        ax = fig.add_subplot(4, 1, 1)
         for tracer in self.master_slave:
             plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
-                        ax=ax, label=tr.config.id,
+                        ax=ax, label=tracer.config.id,
                         color=colors[tracer])
 
-        if self.noise_level!=0.:
-            trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
-            trs = add_noise(trs, level=self.noise_level)
-            plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
+        #if self.noise_level!=0.:
+        #    trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
+        #    trs = add_noise(trs, level=self.noise_level)
+        #    plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
 
-        ax = fig.add_subplot(3, 2, 4)
+        Qs = []
+        ax = fig.add_subplot(4, 1, 3)
         if kwargs.get('noisy_Q', False):
             fxs, fy_ratios = noisy_spectral_ratios(self)
 
-            Qs = []
             xs = []
             ys = []
             ys_ratio = []
@@ -391,7 +394,7 @@ class SyntheticCouple():
             ax.set_ylabel('log(A1/A2)')
             cb = plt.colorbar(s_m)
             cb.set_label('Q')
-            ax = fig.add_subplot(3, 2, 5)
+            ax = fig.add_subplot(4, 1, 4)
             v_range = 200
             #ax.hist(num.array(Qs)[num.where(num.abs(Qs)<=v_range)], bins=25)
             ax.hist(num.array(Qs), bins=25)
@@ -402,8 +405,9 @@ class SyntheticCouple():
                     transform=ax.transAxes)
             ax.set_ylabel('Count')
             ax.set_xlabel('Q')
-        ax = fig.add_subplot(3, 2, 6)
-        infos(ax, kwargs.pop('infos'))
+        #ax = fig.add_subplot(3, 2, 6)
+        #infos(ax, kwargs.pop('infos'))
+        return Qs
 
     def delta_onset(self):
         ''' Get the onset difference between two (!) used phases'''
@@ -1315,16 +1319,30 @@ def invert_test_2D_parallel(noise_level=0.001):
         process_couple(arg)
     print 'Fix parallel version'
     #pool.map(process_couple, args)
+    dist_vs_Q = []
+    for i_tc, testcouple in enumerate(testcouples):
 
-    for testcouple in testcouples:
         infos = '''
         Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n 
         noise_level: %s\nmethod: %s
         ''' % (strike, dip, rake, sampling_rate, noise_level, method)
-        testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
-    outfn = 'testimage'
-    plt.gcf().savefig('output/%s.png' % outfn)
-
+        
+        # return the list of noisy Qs. This should be cleaned up later.....!
+        Qs = testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
+        fig = plt.gcf()
+        d1, d2, z1, z2 = testcouple.get_target_distances_and_depths()
+        mean_dist = num.mean((d1, d2))/1000. 
+        fig.savefig('1D_mdistkm%i.png' % (mean_dist), dpi=240)
+        dist_vs_Q.append((mean_dist, num.median(Qs)))
+    fig = plt.figure(figsize=(6, 4.6))
+    ax = fig.add_subplot(111)
+    for val in dist_vs_Q:
+        ax.plot(val[0], num.abs(val[1]), 'bo')
+    ax.set_title('Distance vs Q (parallel: %s)' % parallel)
+    ax.set_xlabel('Distance [km]')
+    ax.set_ylabel('abs(Q)')
+    fig.savefig('distance_vs_q_parallel%s.png' % parallel, dpi=240)
+    plt.show()
     inverter = QInverter(couples=testcouples)
     inverter.invert()
     inverter.plot()
