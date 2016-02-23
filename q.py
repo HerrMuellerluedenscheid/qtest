@@ -1303,9 +1303,14 @@ def dbtest(noise_level=0.001):
     p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
     tracers = []
-    source_depths = num.arange(10100, 14000, 200)
-    distances = num.arange(28000., 32000., 200)
-
+    #source_depths = num.arange(10100, 14000, 200)
+    #distances = num.arange(28000., 32000., 200)
+    #source_depths = num.arange(10100, 14000, 500)
+    source_depths = num.arange(1000, 1100, 20)
+    source_depths = map(float, source_depths)
+    distances = num.arange(200., 300., 20)
+    #distances = num.arange(28000., 32000., 1000)
+    distances = map(float, distances)
     #source_depths = num.arange(config.source_depth_min,
     #                           config.source_depth_max+config.source_depth_delta,
     #                           config.source_depth_delta*4)
@@ -1322,24 +1327,28 @@ def dbtest(noise_level=0.001):
             lon=float(lon),
             depth=sd,
             magnitude=0.,
-            north_shift=d) for sd in source_depths])
+            north_shift=d,
+            east_shift=d) for sd in source_depths])
 
-    plot_locations(sources, use_effective_latlon=True)
+    from distance_point2line import Coupler, Animator
+    coupler = Coupler()
+    coupler.process(sources, targets, mod, ['p', 'P'], ignore_segments=True, dump_to='webnet_pairing.yaml')
+    fig, ax = Animator.get_3d_ax()
+    #Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
+    Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
+    pairs_by_rays = coupler.filter_pairs(.5, 1, data=coupler.results)
+    animator = Animator(pairs_by_rays)
+    print '''Das kann nicht ganz hinkommen. 2000m minimum distance. Dann muesste
+das deltat > 0.06 sekunden naemlich hinfaellig sein.'''
+    widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
+    pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    for i_r, r in enumerate(pairs_by_rays):
+        e1, e2, t, td, pd, segments = r
+        Animator.plot_ray(segments, ax=ax)
+        pb.update(i_r)
+    print 'done'
+    pb.finish()
     plt.show()
-    from distance_point2line import process as event_pairing
-    from distance_point2line import plot_segments, get_3d_ax, filter_pairs
-    ### Should use die Pie here:
-    pairs_by_rays = event_pairing(sources, targets, mod, cake.PhaseDef('p'))
-
-    pairs_by_rays = filter_pairs(pairs_by_rays, 10, 2000)
-    fig, ax = get_3d_ax()
-    #widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
-    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
-    #for i_r, r in enumerate(pairs_by_rays):
-    #    s, e1, e2, segments = r
-    #    plot_segments(segments, ax=ax)
-    #    pb.update(i_r)
-    #pb.finish()
     pairs = []
     for r in pairs_by_rays:
         t, s1, s2, segments = r
