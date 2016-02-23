@@ -423,23 +423,6 @@ class SyntheticCouple():
     def get_spectra(self):
         return self.spectra
 
-    def q_scherbaum(self, phasestr):
-        sources, targets, fxfy = self.spectra.as_lists()
-        dists = num.zeros(len(sources))
-        arrivals = num.zeros(len(sources))
-        freqs = []
-        A = []
-        for i in range(len(sources)):
-            dists[i] = sources[i].distance_to(targets[i])
-            arrivals[i] = self.engine.get_store(sources[i].store_id).t(phasestr,
-                                                (sources[i].depth, dists[i]))
-            freqs.append(fxfy[i][0])
-            A.append(num.abs(fxfy[i][1]))
-        assert all(fxfy[0][0]==fxfy[1][0])
-        regresses = self.spectra.linregress(1,20)
-        slope = regresses[1]/regresses[0]
-        plt.plot(fxfy[0], _q(fxfy[1], arrivals[::-1], slope=slope))
-
     def _q_1(self, fxfy, A, dists, arrivals):
         # following eqn:
         # http://www.ga.gov.au/corporate_data/81414/Jou1995_v15_n4_p511.pdf (5)
@@ -552,13 +535,13 @@ class QInverter:
         pb.finish()
 
     def plot(self, ax=None, q_threshold=999999.):
-        fig, axs = plt.subplots(2,1)
+        fig = plt.figure(figsize=(5,6))
+        ax = fig.add_subplot(111)
         median = num.median(self.allqs)
         filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
-        axs[0].hist(filtered, bins=100)
+        ax.hist(filtered, bins=100)
         txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
-        axs[0].text(0.01, 0.99, txt, transform=axs[0].transAxes, horizontalalignment='left', verticalalignment='top')
-        axs[1].plot(norm.pdf(filtered), '-r', label='pdf')
+        ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
         #for couple in self.couples:
         #   dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
         #   ax.plot(fx, interc+slope*fx)
@@ -584,12 +567,13 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
         pb.update(itr)
         arrival = tr.arrival()
         z, x, t = arrival.zxt_path_subdivided()
-        ax.plot( x[0].ravel()*cake.d2m, z[0].ravel(), color=colors[tr])
+        x = x[0].ravel()*cake.d2m
+        ax.plot( x, z[0].ravel(), color=colors[tr], alpha=0.3)
         minx[itr] = num.min(x)
         maxx[itr] = num.max(x)
     pb.finish()
     minx = min(minx.min(), -100)-100
-    maxx = max(maxx.min(), 100)+100
+    maxx = max(maxx.max(), 100)+100
     xlims=(minx, maxx)
     model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
     #plt.axes().set_aspect('equal', 'datalim')
@@ -1367,6 +1351,10 @@ def dbtest(noise_level=0.001):
 
     tracers = builder.build(tracers, engine=engine, snuffle=False)
     colors = UniqueColor(tracers=tracers)
+    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    fig = plt.gcf()
+    fig.savefig('location_model_db1.png', dpi=200)
+    plt.show()
     noise = RandomNoise(noise_level)
     testcouples = []
     widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
@@ -1379,23 +1367,33 @@ def dbtest(noise_level=0.001):
     pb.finish()
     #outfn = 'testimage'
     #plt.gcf().savefig('output/%s.png' % outfn)
+    print ''' ... wobei vielleicht spielt das auch keine rolle... vergleiche laenge vorher
+    und hinterher...:'''
+    print len(testcouples)
     testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
+    print len(testcouples)
+    testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
     inverter = QInverter(couples=testcouples)
     inverter.invert()
     inverter.plot(q_threshold=500)
-    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    fig = plt.gcf()
+    fig.savefig('hist_databasetest.png', dpi=200)
+    location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     plt.show()
 
+def apply_webnet():
+    data_path = ''
+    #event_couples = 
 
 if __name__=='__main__':
     #invert_test_1()
     #qpqs()
-    
+
     # DIESER:
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
-    invert_test_2D_parallel(noise_level=0.01)
-    dbtest(noise_level=0.00000001)
+    #invert_test_2D_parallel(noise_level=0.01)
+    dbtest(noise_level=0.001)
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
