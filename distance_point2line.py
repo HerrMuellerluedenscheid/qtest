@@ -64,7 +64,7 @@ class Coupler():
         self.results = []
         self.hookup = None
 
-    def process(self, sources, targets, earthmodel, phases, ignore_segments=True):
+    def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False):
         self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
         phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
         pb = progressbar.ProgressBar(maxval=len(sources)).start()
@@ -90,12 +90,13 @@ class Coupler():
                     if ignore_segments:
                         segments = []
                     if traveled_distance:
-                        self.filtrate.couples.append((ev, cmp_e, t, traveled_distance, passing_distance))
+                        self.filtrate.couples.append((ev, cmp_e, t, float(traveled_distance), float(passing_distance)))
                     self.results.append((ev, cmp_e, t, traveled_distance, passing_distance, segments))
             pb.update(i)
             i += 1
         pb.finish()
-
+        if dump_to:
+            self.filtrate.dump(filename=dump_to)
 
     def filter_pairs(self, threshold_pass_factor, min_travel_distance, data):
         filtered = []
