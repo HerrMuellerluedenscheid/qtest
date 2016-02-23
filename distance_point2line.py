@@ -7,6 +7,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import animation
 from pyrocko import cake, gf, model, parimap
 from pyrocko import orthodrome as ortho
+from pyrocko.gf import ExplosionSource, Target, meta
+from pyrocko.guts import List, Object, String, Tuple, Float
 import progressbar
 
 
@@ -20,63 +22,232 @@ class UniqueColor():
         return self.color_map(self.mapping[tracer])
 
 
-def animate(framenumber, ax, results, colormap):
-    ax.clear()
-    for r in results:
-        s, e1, e2, segments = r
-        plot_segments(segments, ax=ax, color=colormap[s])
-    #ax.invert_zaxis()
-    ax.set_xlim3d([-2000, 2000])
-    ax.set_ylim3d([-2000, 2000])
-    ax.set_zlim3d([6000, 14000])
-    ax.set_xlabel('N [m]')
-    ax.set_ylabel('E [m]')
-    ax.set_zlabel('D [m]')
-    ax.view_init(30, 1.8 * framenumber)
-    return ax,
+class Hookup():
+    def __init__(self, reference):
+        self.reference = reference
+
+    @classmethod
+    def from_locations(cls, locations):
+        return cls(array_center(locations))
+
+    def __call__(self, location):
+        north_m, east_m = ortho.latlon_to_ne_numpy(self.reference.effective_lat,
+                                             self.reference.effective_lon,
+                                             location.effective_lat,
+                                             location.effective_lon)
+        #north_m, east_m = ortho.latlon_to_ne(self.reference, location)
+        return num.array(((north_m[0], east_m[0], location.depth-self.reference.depth), )).T
+        #return num.array(((north_m[0], east_m[0], 0),)).T
+
+    def add_to_ned(self, from_location, ned):
+        correction = self(from_location)
+        correction[-1] -= from_location.depth
+        ned = num.array(ned) + correction
+        return ned
 
 
-def make_animation(results, colormap):
-    fig, ax = get_3d_ax()
-    anim = animation.FuncAnimation(fig, animate, fargs=((ax, results, colormap)), frames=10, interval=15, blit=True)
-    anim.save('coupled_rays.mp4', fps=1, extra_args=['-vcodec', 'libx264'])
-    plt.show()
+class Filtrate(Object):
+    sources = List.T(ExplosionSource.T())
+    targets = List.T(Target.T())
+    earthmodel = meta.Earthmodel1D.T()
+    phases = List.T(String.T())
+    couples = List.T(Tuple.T(5, ExplosionSource.T(),
+                             ExplosionSource.T(),
+                             Target.T(),
+                             Float.T(),
+                             Float.T()), help="(s1, s2, t, passing_distance, traveled_distance)")
+    def __iter__(self):
+        return iter(self.couples)
+
+class Coupler():
+    def __init__(self):
+        self.results = []
+        self.hookup = None
+
+    def process(self, sources, targets, earthmodel, phases, ignore_segments=True):
+        self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
+        phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
+        pb = progressbar.ProgressBar(maxval=len(sources)).start()
+        i = 0
+        self.hookup = Hookup.from_locations(targets)
+        ne_from_center = []
+
+        for i_e, ev in enumerate(sources):
+            for i_t, t in enumerate(targets):
+                arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
+                try:
+                    n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
+                except IndexError as err:
+                    print 'Error> ', err
+                    continue
+
+                n = n * cake.d2m
+                e = e * cake.d2m
+                points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
+                for i_cmp_e, cmp_e in enumerate(sources):
+                    ned_cmp = self.hookup(cmp_e)
+                    traveled_distance, passing_distance, segments = self.get_passing_distance(points_of_segments, num.array(ned_cmp))
+                    if ignore_segments:
+                        segments = []
+                    if traveled_distance:
+                        self.filtrate.couples.append((ev, cmp_e, t, traveled_distance, passing_distance))
+                    self.results.append((ev, cmp_e, t, traveled_distance, passing_distance, segments))
+            pb.update(i)
+            i += 1
+        pb.finish()
 
 
-def get_3d_ax():
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_xlabel('x [m]')
-    ax.set_ylabel('y [m]')
-    ax.set_zlabel('z [m]')
-    ax.invert_zaxis()
-    return fig, ax
+    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data):
+        filtered = []
+        for r in data:
+            if isinstance(r, Filtrate):
+                e1, e2, t, traveled_d, passing_d = r
+            else:
+                e1, e2, t, traveled_d, passing_d, segments = r
+            if traveled_d is False:
+                continue
+
+            gamma = traveled_d/passing_d
+            if gamma<threshold_pass_factor or num.isnan(traveled_d) or traveled_d<min_travel_distance:
+                continue
+            else:
+                filtered.append(r)
+        print '%s of %s pairs passed' %(len(filtered), len(self.results))
+
+        return filtered
+
+    def get_passing_distance(self, ray_points, x0):
+        x1 = ray_points[:, :-1]
+        x2 = ray_points[:, 1:]
+        us = x2-x1
+        us[:, num.where(us==0.)[1]] = num.nan
+        vs = x0-x1
+        ws = x0-x2
+        u_norms = num.linalg.norm(us, axis=0)
+        ps = num.sum(vs.T*us.T, axis=1) / u_norms**2
+
+        # pp = passing point
+        i_pp = num.where(num.logical_and(ps<1, ps>0))[0]
+        if len(i_pp) == 0:
+            # did not pass
+            return False, False, []
+
+        u = us[:, i_pp]
+        p = ps[i_pp]
+        projected_on_u = p * u
+        traveled_distance = num.sum(u_norms[num.where(ps>1)])
+        traveled_distance += num.linalg.norm(projected_on_u)
+
+        # pp distance to segment
+        d_pp = num.linalg.norm(num.cross(vs[:, i_pp], ws[:, i_pp], axis=0)) / u_norms[i_pp]
+        segments = num.hstack((x1[:, :i_pp+1], x1[:, i_pp]+projected_on_u))
+        return traveled_distance, d_pp, segments
 
 
-def filter_pairs(results, threshold_pass_factor, min_travel_distance, ax=None):
-    filtered = []
-    for r in results:
-        s, e1, e2, segments = r
-        if segments == None:
-            continue
+    def get_passing_distance_old(self, ray_points, x0):
+        passed = False
+        passing_distance = False
+        segments = [(ray_points[0], 0, passed)]
+        traveled_distance = 0
+        for i in xrange(len(ray_points)-1):
+            x1, x2 = ray_points[i:i+2]
+            u = x2-x1
+            u_norm = num.linalg.norm(u)
+            if u_norm == 0.:
+                continue
 
-        last_segment, traveled_distance, passing_distance = segments[-1]
-        gamma = traveled_distance/passing_distance
-        if gamma<threshold_pass_factor or num.isnan(traveled_distance) or traveled_distance<min_travel_distance:
-            continue
-        else:
-            filtered.append(r)
-    print '%s of %s pairs passed' %(len(filtered), len(results))
+            v = x0-x1
+            w = x0-x2
+            p = num.dot(v, u) / u_norm**2
+            if p < 0 or p > 1:
+                traveled_distance += u_norm
+                seg = x2
+            else:
+                passing_distance = num.linalg.norm(num.cross(v, w))/u_norm
+                projected_on_u = p * u
+                seg = x1+projected_on_u
+                traveled_distance += num.linalg.norm(projected_on_u)
+                passed = True
+            segments.append((seg, traveled_distance, passing_distance))
+            if passed:
+                break
+        return passed, segments
 
-    return filtered
 
+
+class Animator():
+    def __init__(self, pairs):
+        self.pairs = pairs
+
+    def animate(framenumber, ax, results, colormap):
+        ax.clear()
+        for r in results:
+            s, e1, e2, segments = r
+            plot_segments(segments, ax=ax, color=colormap[s])
+        #ax.invert_zaxis()
+        ax.set_xlim3d([-2000, 2000])
+        ax.set_ylim3d([-2000, 2000])
+        ax.set_zlim3d([6000, 14000])
+        ax.set_xlabel('N [m]')
+        ax.set_ylabel('E [m]')
+        ax.set_zlabel('D [m]')
+        ax.view_init(30, 1.8 * framenumber)
+        return ax,
+
+    @staticmethod
+    def plot_segments(self, segments, ax=None, color='r'):
+        if not ax:
+            fig, ax = get_3d_ax()
+        for i, segment in enumerate(segments):
+            (x,y,z), traveled_dist, passing_dist = segment
+            ax.plot(x, y, z, c=color, alpha=0.1, linewidth=2)
+
+    @staticmethod
+    def get_3d_ax():
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_xlabel('x [m]')
+        ax.set_ylabel('y [m]')
+        ax.set_zlabel('z [m]')
+        ax.invert_zaxis()
+        #ax.set_aspect('equal')
+
+        return fig, ax
+
+    def make_animation(self, results, colormap):
+        fig, ax = get_3d_ax()
+        anim = animation.FuncAnimation(
+            fig, animate, fargs=((ax, results, colormap)), frames=10, interval=15, blit=True)
+        anim.save('coupled_rays.mp4', fps=1, extra_args=['-vcodec', 'libx264'])
+
+    @staticmethod
+    def plot_ray(segments, ax=None):
+        if not ax:
+            fig, ax = Animator.get_3d_ax()
+        x, y, z = segments
+        ax.plot(x, y, z )
+        return ax
+
+    @staticmethod
+    def plot_sources(sources, reference=False, ax=None):
+        if not ax:
+            fig, ax = Animator.get_3d_ax()
+        x, y, z = num.zeros(len(sources)), num.zeros(len(sources)), num.zeros(len(sources))
+        for i, s in enumerate(sources):
+            if reference:
+                x[i], y[i], z[i] = reference(s)
+            else:
+                x[i], y[i], z[i] = (s.effective_latlon[0], s.effective_latlon[1], s.depth)
+        ax.scatter(x, y, z)
+        return ax
 
 def array_center(stations):
-    lats, lons = [], []
+    lats, lons, depths = [], [], []
     for s in stations:
         lats.append(s.lat)
         lons.append(s.lon)
-    return gf.meta.Location(lat=num.mean(lats), lon=num.mean(lons))
+        depths.append(s.depth)
+    return gf.meta.Location(lat=num.mean(lats), lon=num.mean(lons), depth=num.mean(depths))
 
 
 def project2enz(arrival, azimuth_deg):
@@ -84,15 +255,7 @@ def project2enz(arrival, azimuth_deg):
     z, y, t = arrival.zxt_path_subdivided()
     e = num.sin(azimuth) * y[0]
     n = num.cos(azimuth) * y[0]
-    return e, n, z[0]
-
-
-def plot_segments(segments, ax=None, color='r'):
-    if not ax:
-        fig, ax = get_3d_ax()
-    for i, segment in enumerate(segments):
-        (x,y,z), traveled_dist, passing_dist = segment
-        ax.plot(x, y, z, c=color, alpha=0.1, linewidth=2)
+    return n, e, z[0]
 
 
 def stats_by_station(results):
@@ -175,31 +338,6 @@ def hitcount_map(hit_counter, stations, save_to='hitcount_map.png'):
     plt.show()
 
 
-def get_passing_distance(ray_points, x0):
-    segments = []
-    traveled_distance = 0
-    passing_distance = False
-    for i in xrange(len(ray_points)-1):
-        x1, x2 = ray_points[i:i+2]
-        u = x2-x1
-        u_norm = num.linalg.norm(u)
-        v = x0-x1
-        w = x0-x2
-        p = num.dot(v, u) / u_norm**2
-        if p >= 0 and p <= 1:
-            traveled_distance += u_norm
-            seg = num.column_stack([x1, x1+u])
-        else:
-            passing_distance = num.linalg.norm(num.cross(v, w))/u_norm
-            projected_on_u = p * u
-            seg = num.column_stack([x1, x1+projected_on_u])
-            traveled_distance += num.linalg.norm(projected_on_u)
-        segments.append((seg, traveled_distance, passing_distance))
-        if passing_distance != False:
-            break
-
-    return passing_distance, segments
-
 
 def make_station_grid(stations, num_n=20, num_e=20, edge_stretch=1.):
     lats, lons = [], []
@@ -234,88 +372,50 @@ def plot_stations(stations):
     plt.show()
 
 
-def process_stations(args):
-    e, s, phases, east_m, north_m, compare_events, center = args
-    _results = []
-    d = ortho.distance_accurate50m(e, s)*cake.m2d
-    arrival = earthmodel.arrivals([d], phases=phases, zstart=e.depth)
-    if len(arrival)!=1:
-        return [(e, s, 'len(arrival)!=1')]
-
-    x, y, z = project2enz(arrival[0], ortho.azimuth(e, s))
-    x = x * cake.d2m + east_m
-    y = y * cake.d2m + north_m
-    points_of_segments = num.column_stack([x, y, z])
-    for cmp_e in compare_events:
-        cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
-        passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
-        if passed:
-            _results.append((s, e, cmp_e, segments))
-        else:
-            pass
-    return _results
-
-
-def process_events(args):
-    center, s, e, points_of_segments, cmp_e = args
-    cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
-    passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
-    if passed:
-        return (s, e, cmp_e, segments)
-    else:
-        return ()
-
-def process(sources, targets, earthmodel, phases):
-    results = []
-    center = array_center(sources)
-    pb = progressbar.ProgressBar(maxval=len(sources)).start()
-    i = 0
-    ne_from_center = []
-    for s in sources:
-        ne_from_center.append(ortho.latlon_to_ne_numpy(center.lat, center.lon, *s.effective_latlon))
-
-    for i_e, e in enumerate(sources):
-        # can be cached:
-        north_m, east_m = ne_from_center[i_e]
-        #args = [(e, s, phases, east_m, north_m, compare_events, center) for s in stations]
-        #tmp_results = pool.map(process_stations, args)
-        #results.extend(tmp_results)
-
-        for i_t, t in enumerate(targets):
-            #d = ortho.distance_accurate50m(e, s)*cake.m2d
-            arrival = earthmodel.arrivals([t.distance_to(e)*cake.m2d], phases=phases, zstart=e.depth)
-            try:
-                x, y, z = project2enz(arrival[0], e.azibazi_to(t)[0]) #ortho.azimuth(e, t))
-            except IndexError as err:
-                print 'Error> ', err
-                continue
-            x = x * cake.d2m + east_m
-            y = y * cake.d2m + north_m
-            points_of_segments = num.column_stack([x, y, z])
-            #tmp_results = parimap.parimap(process_events, [(center, s, e, points_of_segments, cmp_e) for cmp_e in compare_events])
-            #results.extend(tmp_results)
-            for i_cmp_e, cmp_e in enumerate(sources):
-                cmp_north_m, cmp_east_m = ne_from_center[i_cmp_e]
-                passed, segments = get_passing_distance(points_of_segments, num.array((cmp_east_m, cmp_north_m, cmp_e.depth)))
-                results.append((t, e, cmp_e, segments))
-        pb.update(i)
-        i += 1
-    pb.finish()
-    return results
+#def process_stations(args):
+#    e, s, phases, east_m, north_m, compare_events, center = args
+#    _results = []
+#    d = ortho.distance_accurate50m(e, s)*cake.m2d
+#    arrival = earthmodel.arrivals([d], phases=phases, zstart=e.depth)
+#    if len(arrival)!=1:
+#        return [(e, s, 'len(arrival)!=1')]
+#
+#    x, y, z = project2enz(arrival[0], ortho.azimuth(e, s))
+#    x = x * cake.d2m + east_m
+#    y = y * cake.d2m + north_m
+#    points_of_segments = num.column_stack([x, y, z])
+#    for cmp_e in compare_events:
+#        cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
+#        passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
+#        if passed:
+#            _results.append((s, e, cmp_e, segments))
+#        else:
+#            pass
+#    return _results
+#
+#
+#def process_events(args):
+#    center, s, e, points_of_segments, cmp_e = args
+#    cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
+#    passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
+#    if passed:
+#        return (s, e, cmp_e, segments)
+#    else:
+#        return ()
 
 if __name__=='__main__':
     events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
     compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
     webnet_stations = model.load_stations('/data/meta/stations.pf')
     #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
-    stations = make_station_grid(webnet_stations, num_n=20, num_e=20, edge_stretch=0.15)
+    stations = make_station_grid(webnet_stations, num_n=1, num_e=1, edge_stretch=0.15)
     plot_stations(stations)
     colormap = UniqueColor(tracers=stations)
     phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
-    earthmodel = cake.load_model('earthmodel_malek_alexandrakis.nd')
+    earthmodel = cake.load_model('../earthmodel_malek_alexandrakis.nd')
 
     # sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
-    fig, ax = get_3d_ax()
+    fig, ax = Animator.get_3d_ax()
 
     results = process(events, stations, earthmodel, phases)
 
