@@ -5,6 +5,7 @@ mpl.rc('xtick', labelsize=8)
 
 import copy
 import progressbar
+import multiprocessing
 from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
 from pyrocko.gf import ExplosionSource
 from pyrocko.guts import String
@@ -283,7 +284,9 @@ class UniqueColor():
 
 
 class SyntheticCouple():
-    def __init__(self, master_slave, fmin=-9999, fmax=9999):
+    def __init__(self, master_slave, fmin=-9999, fmax=9999, method='mtspec'):
+        check_method(method)
+        self.method = method
         self.master_slave = master_slave
         self.fmin = fmin
         self.fmax = fmax
@@ -295,20 +298,20 @@ class SyntheticCouple():
         self.repeat = 1
         self.noise_level = 0
 
-    def process(self, method='mtspec', **pp_kwargs):
-        self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
-        self.repeat = pp_kwargs.pop('repeat', self.repeat)
-        check_method(method)
+    def process(self, **pp_kwargs):
         for tracer in self.master_slave:
+            self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
+            self.repeat = pp_kwargs.pop('repeat', self.repeat)
             tr = tracer.process(**pp_kwargs)
-            f, a = self.get_spectrum(tr, method, tracer.chopper)
+            f, a = self.get_spectrum(tr, self.method, tracer.chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
             for i in xrange(self.repeat):
-                tr = tracer.process(**pp_kwargs).copy()
+                #tr = tracer.process(**pp_kwargs).copy()
+                tr = tracer.process(**pp_kwargs)
                 tr_noise = add_noise(tr, level=self.noise_level)
-                f, a = self.get_spectrum(tr_noise, method, tracer.chopper)
+                f, a = self.get_spectrum(tr_noise, self.method, tracer.chopper)
                 fxfy = num.vstack((f,a))
                 self.noisy_spectra.spectra.append((tracer, fxfy))
 
@@ -316,12 +319,15 @@ class SyntheticCouple():
         return spectralize(tr, method, chopper)
 
     def plot(self, colors, **kwargs):
-        fig = plt.figure(figsize=(5, 6))
-        ax = fig.add_subplot(3, 2, 1)
+        fig = plt.figure(figsize=(3, 6))
+        ax = fig.add_subplot(4, 1, 2)
         self.spectra.plot_all(ax, colors=colors, legend=False, fmin=self.fmin,
                               fmax=self.fmax)
         self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.05, legend=False)
         #legend_clear_duplicates(ax)
+        
+        '''
+        # Q model right panel:
         ax = fig.add_subplot(3, 2, 2)
         for tracer in self.master_slave:
             plot_model(mod=tracer.config.earthmodel_1d,
@@ -329,30 +335,30 @@ class SyntheticCouple():
                        color=colors[tracer],
                        ax=ax,
                        parameters=kwargs.get('parameters', ['qp']))
-
         #ax.set_xlim((ax.get_xlim()[0]*0.9,
         #             ax.get_xlim()[1]*1.1))
         for tr in self.master_slave:
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
                        color=colors[tr])
+        '''
         #if not kwargs.get('no_legend', False):
         #    ax.legend()
-        ax = fig.add_subplot(3, 2, 3)
+        ax = fig.add_subplot(4, 1, 1)
         for tracer in self.master_slave:
             plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
-                        ax=ax, label=tr.config.id,
+                        ax=ax, label=tracer.config.id,
                         color=colors[tracer])
 
-        if self.noise_level!=0.:
-            trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
-            trs = add_noise(trs, level=self.noise_level)
-            plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
+        #if self.noise_level!=0.:
+        #    trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
+        #    trs = add_noise(trs, level=self.noise_level)
+        #    plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
 
-        ax = fig.add_subplot(3, 2, 4)
+        Qs = []
+        ax = fig.add_subplot(4, 1, 3)
         if kwargs.get('noisy_Q', False):
             fxs, fy_ratios = noisy_spectral_ratios(self)
 
-            Qs = []
             xs = []
             ys = []
             ys_ratio = []
@@ -388,7 +394,7 @@ class SyntheticCouple():
             ax.set_ylabel('log(A1/A2)')
             cb = plt.colorbar(s_m)
             cb.set_label('Q')
-            ax = fig.add_subplot(3, 2, 5)
+            ax = fig.add_subplot(4, 1, 4)
             v_range = 200
             #ax.hist(num.array(Qs)[num.where(num.abs(Qs)<=v_range)], bins=25)
             ax.hist(num.array(Qs), bins=25)
@@ -399,8 +405,9 @@ class SyntheticCouple():
                     transform=ax.transAxes)
             ax.set_ylabel('Count')
             ax.set_xlabel('Q')
-        ax = fig.add_subplot(3, 2, 6)
-        infos(ax, kwargs.pop('infos'))
+        #ax = fig.add_subplot(3, 2, 6)
+        #infos(ax, kwargs.pop('infos'))
+        return Qs
 
     def delta_onset(self):
         ''' Get the onset difference between two (!) used phases'''
@@ -465,6 +472,12 @@ class SyntheticCouple():
         else:
             intersecting_slave, average_spectrum_slave = fx_slave[0], fy_slave[0]
         return intersecting_master, average_spectrum_master, intersecting_slave , average_spectrum_slave
+
+    def get_target_distances_and_depths(self):
+        ms = self.master_slave
+        d1 = ms[0].target.distance_to(ms[0].source)
+        d2 = ms[1].target.distance_to(ms[1].source)
+        return d1, d2, ms[0].source.depth, ms[1].source.depth
 
 def limited_frequencies_ind(fmin, fmax, f):
     return num.where(num.logical_and(f>=fmin, f<=fmax))
@@ -553,16 +566,16 @@ def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     x, z = num.meshgrid(xlims, mod.profile('z'))
     p = num.repeat(mod.profile(parameter), len(xlims)).reshape(x.shape)
     contour = ax.contourf(x, z, p, cmap=cmap, alpha=0.5)
-    plt.colorbar(contour)
+    #plt.colorbar(contour)
 
 
 def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
-    fig = plt.figure()
+    fig = plt.figure(figsize=(5,4))
     minx, maxx = num.zeros(len(tracers)), num.zeros(len(tracers))
+    miny, maxy = num.zeros(len(tracers)), num.zeros(len(tracers))
     ax = fig.add_subplot(111)
     widgets = ['plotting model and rays: ', progressbar.Percentage(), progressbar.Bar()]
     pb = progressbar.ProgressBar(maxval=len(tracers)-1, widgets=widgets).start()
-
     for itr, tr in enumerate(tracers):
         pb.update(itr)
         arrival = tr.arrival()
@@ -571,13 +584,18 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
         ax.plot( x, z[0].ravel(), color=colors[tr], alpha=0.3)
         minx[itr] = num.min(x)
         maxx[itr] = num.max(x)
+        miny[itr] = num.min(z)
+        maxy[itr] = num.max(z)
     pb.finish()
     minx = min(minx.min(), -100)-100
     maxx = max(maxx.max(), 100)+100
     xlims=(minx, maxx)
+    ylims=(miny, maxy)
     model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
-    #plt.axes().set_aspect('equal', 'datalim')
     ax.set_xlim(xlims)
+    ax.set_ylim(ylims)
+    ax.set_xlabel('Distance [m]')
+    ax.set_ylabel('Depth [m]')
     ax.invert_yaxis()
 
 def qp_model_test():
@@ -1148,6 +1166,11 @@ def invert_test_2D(noise_level=0.001):
     plt.show()
 
 
+def process_couple(args):
+    testcouple, n_repeat, noise = args
+    testcouple.process(repeat=n_repeat, noise=noise)
+    return testcouple
+
 
 def invert_test_2D_parallel(noise_level=0.001):
     print '-------------------invert_test_2D -------------------------------'
@@ -1155,23 +1178,19 @@ def invert_test_2D_parallel(noise_level=0.001):
     #builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.arange(5000., 50000., 300.)
-    d1s = num.linspace(10., 50000., 6)[2:]
+    d1s = num.linspace(1000., 80000., 15)
     ##### ready
-    #z1 = 10.*km
-    #z2 = 14.*km
-    z1 = 11.*km
-    z2 = 13.*km
-    #z1 = 12.4*km
-    #z2 = 12.8*km
-    #z1 = 12.5*km
-    #z2 = 12.6*km
-    ############
     #z1 = 11.*km
     #z2 = 13.*km
-    #z1 = 12.*km
-    #z2 = 12.1*km
-    d1 = 30000.
-    d2s = d1s*z2/z1
+    ###########
+    z1 = 12.5*km
+    z2 = 13.5*km
+    ############
+
+    #if True:
+    #    d2s = d1s*z2/z1
+    parallel = True
+
     #x_targets = num.array([d1, d2])
     #y_targets = num.array([0.]*len(x_targets))
 
@@ -1224,8 +1243,13 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     for i in xrange(len(d1s)):
         print("%s/%s" %(i, len(d1s)))
-        d1 = d1s[i]
-        d2 = d1*z2/z1
+        if parallel:
+            d1 = d1s[i]
+            d2 = d1*z2/z1
+        else:
+            d1 = d1s[i]
+            d2 = d1
+
         targets = xy2targets([d1, d2], [0., 0.], lat, lon, 'Z',  **target_kwargs)
         pair = []
         for itarget, target in enumerate(targets):
@@ -1253,23 +1277,46 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     colors = UniqueColor(tracers=tracers)
     location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    fig = plt.gcf()
+    fig.savefig('locations_model_parallel%s.png'%parallel)
     plt.show()
     tracers = builder.build(tracers, snuffle=False)
     noise = RandomNoise(noise_level)
     testcouples = []
-
     for pair in pairs:
         testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax)
-        testcouple.process(method=method, repeat=n_repeat, noise=noise)
         testcouples.append(testcouple)
+
+    #pool = multiprocessing.Pool()
+    args = [(tc, n_repeat, noise) for tc in testcouples]
+    for arg in args:
+        process_couple(arg)
+    print 'Fix parallel version'
+    #pool.map(process_couple, args)
+    dist_vs_Q = []
+    for i_tc, testcouple in enumerate(testcouples):
+
         infos = '''
         Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n 
         noise_level: %s\nmethod: %s
         ''' % (strike, dip, rake, sampling_rate, noise_level, method)
-        testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
-    outfn = 'testimage'
-    plt.gcf().savefig('output/%s.png' % outfn)
-
+        
+        # return the list of noisy Qs. This should be cleaned up later.....!
+        Qs = testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
+        fig = plt.gcf()
+        d1, d2, z1, z2 = testcouple.get_target_distances_and_depths()
+        mean_dist = num.mean((d1, d2))/1000. 
+        fig.savefig('1D_mdistkm%i.png' % (mean_dist), dpi=240)
+        dist_vs_Q.append((mean_dist, num.median(Qs)))
+    fig = plt.figure(figsize=(6, 4.6))
+    ax = fig.add_subplot(111)
+    for val in dist_vs_Q:
+        ax.plot(val[0], num.abs(val[1]), 'bo')
+    ax.set_title('Distance vs Q (parallel: %s)' % parallel)
+    ax.set_xlabel('Distance [km]')
+    ax.set_ylabel('abs(Q)')
+    fig.savefig('distance_vs_q_parallel%s.png' % parallel, dpi=240)
+    plt.show()
     inverter = QInverter(couples=testcouples)
     inverter.invert()
     inverter.plot()
