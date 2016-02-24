@@ -7,9 +7,11 @@ from pyrocko.fomosto import qseis
 from pyrocko import trace
 from pyrocko import guts
 from pyrocko import io
+from pyrocko import util
 from pyrocko.gf import meta, Engine, Target, DCSource
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
+from autogain.autogain import PhasePie, PickPie
 import time
 import argparse
 import logging
@@ -19,6 +21,7 @@ import progressbar
 pjoin = os.path.join
 
 logger = logging.getLogger()
+
 
 
 def add_noise(t, level):
@@ -85,7 +88,9 @@ class Builder:
         logger.info('prepare or load tracers....')
         pb = progressbar.ProgressBar(maxval=len(tracers)).start()
         for i_tr, tr in enumerate(tracers):
-            if tr.setup_from_engine(engine):
+            if tr.setup_data():
+                ready.append(tr)
+            elif tr.setup_from_engine(engine):
                 ready.append(tr)
             elif self.cache(tr, load=True):
                 ready.append(tr)
@@ -107,7 +112,7 @@ class Builder:
             traces = []
             for tracer in ready:
                 dist, z = tracer.get_geometry()
-                trs = [t.copy() for t in tracer.traces]
+                trs = [t.copy() for t in tracer.traces if t ]
                 map(lambda x: x.set_codes(network='%2i-%2i'%(dist, z)), trs)
                 traces.extend(trs)
             trace.snuffle(traces)
@@ -166,19 +171,19 @@ class Builder:
 
 
 class Tracer:
-    def __init__(self, source, target, chopper, component='v', *args, **kwargs):
-        ''':param component: qseis component'''
+    def __init__(self, source, target, chopper, channel='v', *args, **kwargs):
+        ''':param channel: qseis channel'''
         self.runner = None
         self.source = source
         self.target = target
         self.config = kwargs.pop('config', None)
         self.traces = None
-        self.processed_cache = {}
+        self.processed = False
         self.chopper = chopper
         self.kwargs = kwargs
-        self.component = component
+        self.channel = channel
 
-        if not self.target.store_id:
+        if not self.target.store_id and not self.kwargs.pop('no_config', False):
             self.config.receiver_distances = [source.distance_to(target)/1000.]
             self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
             self.config.source_depth = source.depth/1000.
@@ -188,6 +193,9 @@ class Tracer:
 
     def read_files(self, dir):
         self.traces = io.load(dir)
+
+    def setup_data(self):
+        return False
 
     def setup_from_engine(self, engine=None):
         if engine and self.target.store_id:
@@ -199,11 +207,11 @@ class Tracer:
         return
 
     def process(self, **pp_kwargs):
-        tr = self.processed_cache.get(self.component, False)
+        tr = self.processed
         if not tr:
-            tr_raw = self.filter_by_component(self.component).copy()
+            tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
-        self.processed_cache[self.component] = tr
+        self.processed = tr
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
@@ -219,8 +227,8 @@ class Tracer:
 
         return tr
 
-    def filter_by_component(self, component):
-        tr = filter(lambda t: t.nslc_id[3]==component, self.traces)[0]
+    def filter_by_channel(self, channel):
+        tr = filter(lambda t: t.nslc_id[3]==channel, self.traces)[0]
         return tr
 
     def set_geometry(self, distances, azimuths, depths):
@@ -243,8 +251,32 @@ class Tracer:
     def get_geometry(self):
         return self.source.distance_to(self.target), self.source.depth
 
+    def label(self):
+        return self.config.id
+
+class DataTracer(Tracer):
+    def __init__(self, **kwargs):
+        self.data_pile = kwargs.pop('data_pile')
+        kwargs.update({'no_config': True})
+        Tracer.__init__(self, **kwargs)
+
+    def setup_data(self):
+        self.process()
+        return True
+
+    def process(self, **pp_kwargs):
+        tr = self.processed
+        if not tr:
+            tr = self.chopper.chop_pile(self.data_pile, self.source, self.target)
+        self.traces = [tr]
+        self.processed = tr
+        return self.post_process(tr, **pp_kwargs)
+
+    def label(self):
+        return '%s/%s' % (util.time_to_str(self.source.time), ".".join(self.target.codes))
+
 class Chopper():
-    def __init__(self, startphasestr, endphasestr=None, fixed_length=None,
+    def __init__(self, startphasestr=None, endphasestr=None, fixed_length=None,
                  phase_position=0.5, xfade=0.0, phaser=None):
         self.phase_pie = phaser or PhasePie()
         self.startphasestr = startphasestr
@@ -267,20 +299,32 @@ class Chopper():
         tr_bkp = tr
         tr = tr.copy()
         tr.set_location('cp')
+        tstart, tend = self.setup_time_window(tstart, tend)
+        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
+        self.chopped.add(s, t, tr)
+        return tr
+
+    def chop_pile(self, data_pile, source, target):
+        tstart = self.phase_pie.t(self.startphasestr, (source, target))
+        if not tstart:
+            return tstart
+        tend = self.fixed_length + tstart
+        tstart, tend = self.setup_time_window(tstart, tend)
+        select = lambda x: x.nslc_id == target.codes
+
+        # A little dangerous:
+        try:
+            tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
+        except IndexError:
+            tr = None
+        self.chopped.add(source, target, tr) 
+        return tr
+
+    def setup_time_window(self, tstart, tend):
         trange = tend-tstart
         tstart -= trange*self.phase_position
         tend -= trange*self.phase_position
-        if debug:
-            import pdb 
-            pdb.set_trace()
-            tr.snuffle()
-            print tstart
-            print tend
-        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
-        #taperer = trace.CosFader(xfrac=self.get_xfade())
-        #tr.taper(taperer)
-        self.chopped.add(s,t,tr)
-        return tr
+        return tstart, tend
 
     def get_xfade(self):
         return self.xfade
@@ -307,7 +351,11 @@ class Chopper():
         return self.arrival(*args, **kwargs).t
 
     def arrival(self, s, t):
-        return self.phase_pie.arrival(self.startphasestr, (s.depth, s.distance_to(t)))
+        try:
+            return self.phase_pie.arrival(self.startphasestr, (s.depth, s.distance_to(t)))
+        except AttributeError:
+            return self.phase_pie.arrival(self.startphasestr, (s, t))
+
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
