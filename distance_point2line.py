@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import animation
 from pyrocko import cake, gf, model, parimap
 from pyrocko import orthodrome as ortho
-from pyrocko.gf import ExplosionSource, Target, meta
+from pyrocko.gf import ExplosionSource, Source, DCSource, Target, meta
 from pyrocko.guts import List, Object, String, Tuple, Float
 import progressbar
 
@@ -47,22 +47,27 @@ class Hookup():
 
 
 class Filtrate(Object):
-    sources = List.T(ExplosionSource.T())
+    sources = List.T(Source.T())
     targets = List.T(Target.T())
     earthmodel = meta.Earthmodel1D.T()
     phases = List.T(String.T())
-    couples = List.T(Tuple.T(5, ExplosionSource.T(),
-                             ExplosionSource.T(),
-                             Target.T(),
-                             Float.T(),
-                             Float.T()), help="(s1, s2, t, passing_distance, traveled_distance)")
+    #couples = List.T(List.T(DCSource.T(),
+    #                         DCSource.T(),
+    #                         Target.T(),
+    #                         Float.T(),
+    #                         Float.T()), help="(s1, s2, t, passing_distance, traveled_distance)")
+    couples = List.T(List.T())
     def __iter__(self):
         return iter(self.couples)
 
+    def __len__(self):
+        return len(self.couples)
+
 class Coupler():
-    def __init__(self):
+    def __init__(self, filtrate=None):
         self.results = []
         self.hookup = None
+        self.filtrate = filtrate
 
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False):
         self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
@@ -71,7 +76,8 @@ class Coupler():
         i = 0
         self.hookup = Hookup.from_locations(targets)
         ne_from_center = []
-
+        failed = 0
+        passed = 0
         for i_e, ev in enumerate(sources):
             for i_t, t in enumerate(targets):
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
@@ -86,25 +92,38 @@ class Coupler():
                 points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
-                    traveled_distance, passing_distance, segments = self.get_passing_distance(points_of_segments, num.array(ned_cmp))
+                    try:
+                        traveled_distance, passing_distance, segments = self.get_passing_distance(points_of_segments, num.array(ned_cmp))
+                        passed += 1
+                    except IndexError:
+                        failed += 1
+                        continue
                     if ignore_segments:
                         segments = []
                     if traveled_distance:
-                        self.filtrate.couples.append((ev, cmp_e, t, float(traveled_distance), float(passing_distance)))
+                        self.filtrate.couples.append([ev, cmp_e, t, float(traveled_distance), float(passing_distance)])
                     self.results.append((ev, cmp_e, t, traveled_distance, passing_distance, segments))
             pb.update(i)
             i += 1
         pb.finish()
+        print 'failed: %s, passed:%s ' % (failed, passed)
         if dump_to:
+            self.filtrate.validate()
+            print 'valid'
+            self.filtrate.regularize()
             self.filtrate.dump(filename=dump_to)
 
     def filter_pairs(self, threshold_pass_factor, min_travel_distance, data):
         filtered = []
+        has_segments = True
+        if isinstance(data, Filtrate):
+            has_segments = False
+
         for r in data:
-            if isinstance(r, Filtrate):
-                e1, e2, t, traveled_d, passing_d = r
-            else:
+            if has_segments:
                 e1, e2, t, traveled_d, passing_d, segments = r
+            else:
+                e1, e2, t, traveled_d, passing_d = r
             if traveled_d is False:
                 continue
 
@@ -113,7 +132,7 @@ class Coupler():
                 continue
             else:
                 filtered.append(r)
-        print '%s of %s pairs passed' %(len(filtered), len(self.results))
+        print '%s of %s pairs passed' %(len(filtered), len(data))
 
         return filtered
 
@@ -230,7 +249,7 @@ class Animator():
         return ax
 
     @staticmethod
-    def plot_sources(sources, reference=False, ax=None):
+    def plot_sources(sources, reference=False, ax=None, alpha=1):
         if not ax:
             fig, ax = Animator.get_3d_ax()
         x, y, z = num.zeros(len(sources)), num.zeros(len(sources)), num.zeros(len(sources))
@@ -239,7 +258,7 @@ class Animator():
                 x[i], y[i], z[i] = reference(s)
             else:
                 x[i], y[i], z[i] = (s.effective_latlon[0], s.effective_latlon[1], s.depth)
-        ax.scatter(x, y, z)
+        ax.scatter(x, y, z, alpha=alpha)
         return ax
 
 def array_center(stations):
@@ -372,37 +391,6 @@ def plot_stations(stations):
         ax.plot(s.lon, s.lat, 'bo')
     plt.show()
 
-
-#def process_stations(args):
-#    e, s, phases, east_m, north_m, compare_events, center = args
-#    _results = []
-#    d = ortho.distance_accurate50m(e, s)*cake.m2d
-#    arrival = earthmodel.arrivals([d], phases=phases, zstart=e.depth)
-#    if len(arrival)!=1:
-#        return [(e, s, 'len(arrival)!=1')]
-#
-#    x, y, z = project2enz(arrival[0], ortho.azimuth(e, s))
-#    x = x * cake.d2m + east_m
-#    y = y * cake.d2m + north_m
-#    points_of_segments = num.column_stack([x, y, z])
-#    for cmp_e in compare_events:
-#        cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
-#        passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
-#        if passed:
-#            _results.append((s, e, cmp_e, segments))
-#        else:
-#            pass
-#    return _results
-#
-#
-#def process_events(args):
-#    center, s, e, points_of_segments, cmp_e = args
-#    cmp_north_m, cmp_east_m = ortho.latlon_to_ne(center, cmp_e)
-#    passed, segments = get_passing_distance(points_of_segments, (cmp_east_m, cmp_north_m, cmp_e.depth))
-#    if passed:
-#        return (s, e, cmp_e, segments)
-#    else:
-#        return ()
 
 if __name__=='__main__':
     events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
