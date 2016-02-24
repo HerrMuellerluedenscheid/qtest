@@ -6,11 +6,13 @@ mpl.rc('xtick', labelsize=8)
 import copy
 import progressbar
 import multiprocessing
-from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, Source
 from pyrocko.gf import ExplosionSource
 from pyrocko.guts import String
 from pyrocko import orthodrome
-from pyrocko import cake
+from pyrocko.gui_util import PhaseMarker
+from pyrocko import cake, model
+from pyrocko import pile
 from pyrocko.fomosto import qseis
 from pyrocko.trace import nextpow2
 from collections import defaultdict
@@ -19,10 +21,11 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
 import os
-from micro_engine import Tracer, Builder
+from micro_engine import DataTracer, Tracer, Builder
 from micro_engine import add_noise, RandomNoise, Chopper, DDContainer
-from autogain.autogain import PhasePie
+from autogain.autogain import PhasePie, PickPie
 import logging
+from distance_point2line import Coupler, Animator, Filtrate
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 pjoin = os.path.join
@@ -55,6 +58,10 @@ def getattr_dot(obj, attr):
     return v
 
 
+def pb_widgets(message=''):
+    return [message, progressbar.Percentage(), progressbar.Bar()]
+
+
 def xy2targets(x, y, o_lat, o_lon, channels, **kwargs):
     assert len(x) == len(y)
     targets = []
@@ -83,7 +90,8 @@ def ax_if_needed(ax):
 
 def plot_traces(tr, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
-    ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
+    if tr:
+        ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
     ax.set_xlabel('time [s]')
     ax.set_ylabel('displ [m]')
 
@@ -232,11 +240,17 @@ class Spectra(DDContainer):
             ax.axvline(fmin)
         elif fmax:
             ax.axvline(fmax)
+        
+        i_fail = 0
         for tracer, fxfy in self.spectra:
+            if fxfy is None:
+                ax.text(0.01, 0.90+i_fail, 'no data', transform=ax.transAxes, verticalalignment='top')
+                i_fail -= 0.1
+                continue
             fx, fy = num.vsplit(fxfy, 2)
             if colors:
                 color = colors[tracer]
-            ax.plot(fx.T, fy.T, label=tracer.config.id, color=color, alpha=alpha)
+            ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
             count += 1
         ax.autoscale()
         ax.set_title("$\sqrt{PSD}$")
@@ -294,8 +308,9 @@ class SyntheticCouple():
         self.noisy_spectra = Spectra()
         self.fit_function = None
         self.colors = None
+        self.good = True
 
-        self.repeat = 1
+        self.repeat = 0
         self.noise_level = 0
 
     def process(self, **pp_kwargs):
@@ -303,6 +318,10 @@ class SyntheticCouple():
             self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
             self.repeat = pp_kwargs.pop('repeat', self.repeat)
             tr = tracer.process(**pp_kwargs)
+            if tr is None:
+                self.spectra.spectra.append((tracer, tr))
+                self.good = False
+                continue
             f, a = self.get_spectrum(tr, self.method, tracer.chopper)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
@@ -346,8 +365,7 @@ class SyntheticCouple():
         ax = fig.add_subplot(4, 1, 1)
         for tracer in self.master_slave:
             plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
-                        ax=ax, label=tracer.config.id,
-                        color=colors[tracer])
+                        ax=ax, label=tracer.label(), color=colors[tracer])
 
         #if self.noise_level!=0.:
         #    trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
@@ -415,9 +433,9 @@ class SyntheticCouple():
         assert len(self.master_slave)==2
         for tr in self.master_slave:
             if not diff:
-                diff = tr.onset()
+                diff = tr.onset()-tr.source.time
             else:
-                diff -= tr.onset()
+                diff -= (tr.onset()-tr.source.time)
         return diff
 
     def set_fit_function(self, func):
@@ -537,7 +555,7 @@ class QInverter:
             fx, fy_ratio = spectral_ratio(couple)
             slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             dt = couple.delta_onset()
-            Q = -1*num.pi*dt/slope
+            Q = num.abs(num.pi*dt/slope)
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
@@ -547,11 +565,14 @@ class QInverter:
             self.stderrs.append(stderr)
         pb.finish()
 
-    def plot(self, ax=None, q_threshold=999999.):
+    def plot(self, ax=None, q_threshold=None):
         fig = plt.figure(figsize=(5,6))
         ax = fig.add_subplot(111)
         median = num.median(self.allqs)
-        filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
+        if q_threshold is not None:
+            filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
+        else:
+            filtered = self.allqs
         ax.hist(filtered, bins=100)
         txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
         ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
@@ -1337,16 +1358,16 @@ def dbtest(noise_level=0.001):
     fmin = 10.
     fmax = 40.
 
-    store_id = 'qplayground_30000m'
+    mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
 
     engine = LocalEngine(store_superdirs=['/data/stores'])
-    store = engine.get_store(store_id)
-    config = engine.get_store_config(store_id)
-    mod = config.earthmodel_1d
+    #store = engine.get_store(store_id)
+    #config = engine.get_store_config(store_id)
+    #mod = config.earthmodel_1d
     component = 'Z'
-    target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
-    targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+    #target_kwargs = {
+    #    'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
+    #targets = [Target(lat=lat, lon=lon, **target_kwargs)]
     p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
     tracers = []
@@ -1367,15 +1388,27 @@ def dbtest(noise_level=0.001):
 
     #sources = [DCSource(lat=float(lat), lon=float(lon), depth=sd, strike=strike,
     #               dip=dip, rake=rake, magnitude=1.5) for sd in source_depths]
-    sources = []
-    for d in distances:
-        sources.extend([ExplosionSource(
-            lat=float(lat),
-            lon=float(lon),
-            depth=sd,
-            magnitude=0.,
-            north_shift=d,
-            east_shift=d) for sd in source_depths])
+
+
+    # webnet sources
+    events = model.Event.load_catalog('/data/meta/events2008.pf')
+    sources = [DCSource.from_pyrocko_event(e) for e in events]
+
+    # webnet Z targets:
+    stations = model.load_stations('/data/meta/stations.pf')
+    targets = [Target(lat=s.lat,
+                      lon=s.lon,
+                      codes=(s.network, s.station, s.location, 'Z')) for s in stations]
+
+    #sources = []
+    #for d in distances:
+    #    sources.extend([ExplosionSource(
+    #        lat=float(lat),
+    #        lon=float(lon),
+    #        depth=sd,
+    #        magnitude=0.,
+    #        north_shift=d,
+    #        east_shift=d) for sd in source_depths])
 
     from distance_point2line import Coupler, Animator
     coupler = Coupler()
@@ -1437,9 +1470,110 @@ das deltat > 0.06 sekunden naemlich hinfaellig sein.'''
     location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     plt.show()
 
+
+def reset_events(markers, events):
+    for e in events:
+        marks = filter(lambda x: x.get_event_time()==e.time, markers)
+        for m in marks:
+            m.set_event(e)
+
+def s2t(s, channel='Z'):
+    return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation,
+                  codes=(s.network, s.station, s.location, channel))
+
+def e2s(e):
+    return Source.from_pyrocko_event(e)
+
+
 def apply_webnet():
-    data_path = ''
-    #event_couples = 
+    print '-------------------apply  -------------------------------'
+    builder = Builder()
+    method = 'mtspec'
+    fmin = 40
+    fmax = 100.
+    mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
+    markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
+    events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    reset_events(markers, events)
+    pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
+    stations = model.load_stations('/data/meta/stations.pf')
+    channel = 'SHZ'
+    want_phase = 'P'
+    pie.process_markers(phase_selection=want_phase, stations=stations, channel=channel)
+    p_chopper = Chopper(startphasestr=want_phase, fixed_length=0.2, phase_position=0.5, phaser=pie)
+    tracers = []
+    load_coupler = True
+    fn_coupler = 'webnet_pairing.yaml'
+    #fn_mseed = '/media/usb/webnet/gse2/2008Oct'
+    print 'incomplete data set!'
+    fn_mseed = '/media/usb/webnet/mseed'
+    data_pile = pile.make_pile(fn_mseed)
+    # webnet sources
+    sources = [e2s(e) for e in events]
+    sources = sources[0:200]
+
+    # webnet Z targets:
+    targets = [s2t(s, channel) for s in stations]
+    if load_coupler:
+        filtrate = Filtrate.load(filename=fn_coupler)
+        coupler = Coupler(filtrate)
+    else:
+        coupler = Coupler()
+        coupler.process(sources, targets, mod, ['p', 'P'], ignore_segments=True, dump_to=fn_coupler)
+
+    fig, ax = Animator.get_3d_ax()
+    pairs_by_rays = coupler.filter_pairs(4., 600, data=coupler.filtrate)
+    paired_sources = []
+    for p in pairs_by_rays:
+        s1, s2, t, td, pd = p
+        paired_sources.extend([s1, s2])
+    Animator.plot_sources(sources=paired_sources, reference=coupler.hookup, ax=ax, alpha=0.01)
+    #animator = Animator(pairs_by_rays)
+    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    #for i_r, r in enumerate(pairs_by_rays):
+    #    e1, e2, t, td, pd, segments = r
+    #    Animator.plot_ray(segments, ax=ax)
+    #    pb.update(i_r)
+    #print 'done'
+    #pb.finish()
+    plt.show()
+    pairs = []
+
+    for r in pairs_by_rays:
+        s1, s2, t, td, pd = r
+        tracer1 = DataTracer(data_pile=data_pile, source=s1, target=t, chopper=p_chopper, channel=channel)
+        tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t, chopper=p_chopper, channel=channel)
+        pair = [tracer1, tracer2]
+        tracers.extend(pair)
+        pairs.append(pair)
+
+    tracers = builder.build(tracers, snuffle=False)
+    colors = UniqueColor(tracers=tracers)
+    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    #fig = plt.gcf()
+    #fig.savefig('location_model_db1.png', dpi=200)
+    #plt.show()
+    #noise = RandomNoise(noise_level)
+    testcouples = []
+    pb = progressbar.ProgressBar(maxval=len(pairs)-1, widgets=pb_widgets('processing couples')).start()
+    for i_p, pair in enumerate(pairs):
+        pb.update(i_p)
+        testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax, method=method)
+        #testcouple.process(method=method, repeat=n_repeat, noise=noise)
+        testcouple.process()
+        if testcouple.good:
+            testcouples.append(testcouple)
+            #testcouple.plot(infos=infos, colors=colors, fmin=fmin, fmax=fmax)
+    pb.finish()
+    #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
+    inverter = QInverter(couples=testcouples)
+    inverter.invert()
+    inverter.plot(q_threshold=100)
+    fig = plt.gcf()
+    fig.savefig('hist_databasetest.png', dpi=200)
+    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    plt.show()
+
 
 if __name__=='__main__':
     #invert_test_1()
@@ -1449,7 +1583,9 @@ if __name__=='__main__':
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.01)
-    dbtest(noise_level=0.001)
+    #dbtest(noise_level=0.001)
+    # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
+    apply_webnet()
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
