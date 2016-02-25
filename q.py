@@ -195,7 +195,8 @@ class DCSourceWid(DCSource):
     id = String.T(optional=True, default=None)
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
-
+        self.stf = get_stf(self.magnitude)
+        print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
 
 class HaskellSourceWid(RectangularSource):
     id = String.T(optional=True, default=None)
@@ -594,9 +595,9 @@ class QInverter:
         #self.p_values = []
         #self.stderrs = []
         widgets = ['regression analysis', progressbar.Percentage(), progressbar.Bar()]
-        pb = progressbar.ProgressBar(maxval=len(self.couples)-1, widgets=widgets).start()
+        pb = progressbar.ProgressBar(maxval=len(self.couples), widgets=widgets).start()
         for i_c, couple in enumerate(self.couples):
-            pb.update(i_c)
+            pb.update(i_c+1)
             fx, fy_ratio = spectral_ratio(couple)
             slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             dt = couple.delta_onset()
@@ -695,7 +696,7 @@ def qp_model_test():
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -808,7 +809,7 @@ def vp_model_test():
             new_mod.append(layer)
         models.append(new_mod)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -899,7 +900,7 @@ def invert_test_1():
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -1013,7 +1014,7 @@ def invert_test_2(noise_level=0.01):
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -1143,7 +1144,7 @@ def invert_test_2D(noise_level=0.001):
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
+        'elevation': 0., 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
 
     targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
@@ -1293,7 +1294,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
+        'elevation': 0., 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
 
     #targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
     #logger.info('Using %s targets' % (len(targets)))
@@ -1424,27 +1425,27 @@ def dbtest(noise_level=0.001):
     fmin = 10.
     fmax = 40.
 
-    mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
+    store_id = 'qplayground_30000m'
 
     engine = LocalEngine(store_superdirs=['/data/stores'])
-    #store = engine.get_store(store_id)
-    #config = engine.get_store_config(store_id)
-    #mod = config.earthmodel_1d
+    store = engine.get_store(store_id)
+    config = engine.get_store_config(store_id)
+    mod = config.earthmodel_1d
     component = 'Z'
-    #target_kwargs = {
-    #    'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
-    #targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+    target_kwargs = {
+        'elevation': 0., 'codes': ('', 'KVC', '', component), 'store_id': store_id}
+    targets = [Target(lat=lat, lon=lon, **target_kwargs)]
     p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
     tracers = []
-    #source_depths = num.arange(10100, 14000, 200)
-    #distances = num.arange(28000., 32000., 200)
+    source_depths = num.arange(10100, 14000, 500)
+    distances = num.arange(28000., 32000., 500)
     #source_depths = num.arange(10100, 14000, 500)
-    source_depths = num.arange(1000, 1100, 20)
-    source_depths = map(float, source_depths)
-    distances = num.arange(200., 300., 20)
-    #distances = num.arange(28000., 32000., 1000)
-    distances = map(float, distances)
+    #source_depths = num.arange(1000, 1100, 20)
+    #source_depths = map(float, source_depths)
+    #distances = num.arange(200., 300., 20)
+    ##distances = num.arange(28000., 32000., 1000)
+    #distances = map(float, distances)
     #source_depths = num.arange(config.source_depth_min,
     #                           config.source_depth_max+config.source_depth_delta,
     #                           config.source_depth_delta*4)
@@ -1454,27 +1455,15 @@ def dbtest(noise_level=0.001):
 
     #sources = [DCSource(lat=float(lat), lon=float(lon), depth=sd, strike=strike,
     #               dip=dip, rake=rake, magnitude=1.5) for sd in source_depths]
-
-
-    # webnet sources
-    events = model.Event.load_catalog('/data/meta/events2008.pf')
-    sources = [DCSource.from_pyrocko_event(e) for e in events]
-
-    # webnet Z targets:
-    stations = model.load_stations('/data/meta/stations.pf')
-    targets = [Target(lat=s.lat,
-                      lon=s.lon,
-                      codes=(s.network, s.station, s.location, 'Z')) for s in stations]
-
-    #sources = []
-    #for d in distances:
-    #    sources.extend([ExplosionSource(
-    #        lat=float(lat),
-    #        lon=float(lon),
-    #        depth=sd,
-    #        magnitude=0.,
-    #        north_shift=d,
-    #        east_shift=d) for sd in source_depths])
+    sources = []
+    for d in distances:
+        sources.extend([DCSourceWid(
+            lat=float(lat),
+            lon=float(lon),
+            depth=float(sd),
+            magnitude=0.,
+            north_shift=float(d),
+            east_shift=float(d)) for sd in source_depths])
 
     from distance_point2line import Coupler, Animator
     coupler = Coupler()
@@ -1487,17 +1476,17 @@ def dbtest(noise_level=0.001):
     print '''Das kann nicht ganz hinkommen. 2000m minimum distance. Dann muesste
 das deltat > 0.06 sekunden naemlich hinfaellig sein.'''
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
-    pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
-    for i_r, r in enumerate(pairs_by_rays):
-        e1, e2, t, td, pd, segments = r
-        Animator.plot_ray(segments, ax=ax)
-        pb.update(i_r)
-    print 'done'
-    pb.finish()
-    plt.show()
+    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    #for i_r, r in enumerate(pairs_by_rays):
+    #    e1, e2, t, td, pd, segments = r
+    #    Animator.plot_ray(segments, ax=ax)
+    #    pb.update(i_r)
+    #print 'done'
+    #pb.finish()
+    #plt.show()
     pairs = []
     for r in pairs_by_rays:
-        t, s1, s2, segments = r
+        s1, s2, t  = r[0:3]
         tracer1 = Tracer(s1, t, p_chopper, component=component)
         tracer2 = Tracer(s2, t, p_chopper, component=component)
         pair = [tracer1, tracer2]
@@ -1557,7 +1546,7 @@ def apply_webnet():
     builder = Builder()
     method = 'mtspec'
     fmin = 40
-    fmax = 89.
+    fmax = 89
     min_magnitude = -10
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
@@ -1570,12 +1559,12 @@ def apply_webnet():
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
     want_phase = 'S'
-    #window_length = {'S': 0.4, 'P': 0.1}
-    #phase_position = {'S': 0.2, 'P': 0.2}
-    window_length = {'S': 0.4, 'P': 0.4}
+    window_length = {'S': 0.4, 'P': 0.1}
     phase_position = {'S': 0.2, 'P': 0.2}
+    #window_length = {'S': 0.4, 'P': 0.4}
+    #phase_position = {'S': 0.2, 'P': 0.2}
 
-    channels = {'P': 'SHZ', 'S': 'SHN' }
+    channels = {'P': 'SHZ', 'S': 'SHE' }
     channel = channels[want_phase]
     pie.process_markers(phase_selection=want_phase, stations=stations, channel=channel)
     p_chopper = Chopper(
@@ -1645,7 +1634,7 @@ def apply_webnet():
     #plt.show()
     #noise = RandomNoise(noise_level)
     testcouples = []
-    pb = progressbar.ProgressBar(maxval=len(pairs)-1, widgets=pb_widgets('processing couples')).start()
+    pb = progressbar.ProgressBar(maxval=len(pairs), widgets=pb_widgets('processing couples')).start()
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
         testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax, method=method)
@@ -1672,8 +1661,8 @@ if __name__=='__main__':
     # DIESER:
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
-    invert_test_2D_parallel(noise_level=0.01)
-    #dbtest(noise_level=0.001)
+    #invert_test_2D_parallel(noise_level=0.01)
+    dbtest(noise_level=0.001)
     # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
     #apply_webnet()
     plt.show()
