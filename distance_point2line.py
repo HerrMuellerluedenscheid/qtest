@@ -7,7 +7,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import animation
 from pyrocko import cake, gf, model, parimap
 from pyrocko import orthodrome as ortho
-from pyrocko.gf import ExplosionSource, Source, DCSource, Target, meta
+from pyrocko import util
+from pyrocko.gf import ExplosionSource, Source, DCSource, Target, meta, SourceWithMagnitude
 from pyrocko.guts import List, Object, String, Tuple, Float
 import progressbar
 
@@ -47,7 +48,7 @@ class Hookup():
 
 
 class Filtrate(Object):
-    sources = List.T(Source.T())
+    sources = List.T(SourceWithMagnitude.T())
     targets = List.T(Target.T())
     earthmodel = meta.Earthmodel1D.T()
     phases = List.T(String.T())
@@ -113,7 +114,7 @@ class Coupler():
             self.filtrate.regularize()
             self.filtrate.dump(filename=dump_to)
 
-    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data):
+    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data, ignore=[]):
         filtered = []
         has_segments = True
         if isinstance(data, Filtrate):
@@ -124,6 +125,9 @@ class Coupler():
                 e1, e2, t, traveled_d, passing_d, segments = r
             else:
                 e1, e2, t, traveled_d, passing_d = r
+            if util.match_nslcs(ignore, [t.codes]):
+                continue
+
             if traveled_d is False:
                 continue
 
@@ -253,12 +257,19 @@ class Animator():
         if not ax:
             fig, ax = Animator.get_3d_ax()
         x, y, z = num.zeros(len(sources)), num.zeros(len(sources)), num.zeros(len(sources))
-        for i, s in enumerate(sources):
+        if isinstance(sources, dict):
+            srcs = sources.keys()
+            count = sources.values()
+        else:
+            srcs = sources
+            count = 1
+
+        for i, s in enumerate(srcs):
             if reference:
                 x[i], y[i], z[i] = reference(s)
             else:
                 x[i], y[i], z[i] = (s.effective_latlon[0], s.effective_latlon[1], s.depth)
-        ax.scatter(x, y, z, alpha=alpha)
+        ax.scatter(x, y, z, s=count, alpha=alpha)
         return ax
 
 def array_center(stations):
