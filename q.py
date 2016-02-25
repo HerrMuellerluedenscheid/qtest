@@ -5,18 +5,18 @@ mpl.rc('xtick', labelsize=8)
 
 import copy
 import progressbar
-import multiprocessing
-from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, Source
-from pyrocko.gf import ExplosionSource
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, SourceWithMagnitude
 from pyrocko.guts import String
 from pyrocko import orthodrome
 from pyrocko.gui_util import PhaseMarker
+from pyrocko import util
 from pyrocko import cake, model
 from pyrocko import pile
+from pyrocko import moment_tensor
 from pyrocko.fomosto import qseis
 from pyrocko.trace import nextpow2
 from collections import defaultdict
-from scipy.stats import linregress, norm
+from scipy.stats import linregress
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
@@ -26,6 +26,12 @@ from micro_engine import add_noise, RandomNoise, Chopper, DDContainer
 from autogain.autogain import PhasePie, PickPie
 import logging
 from distance_point2line import Coupler, Animator, Filtrate
+try:
+    from pyrocko.gf import BoxcarSTF, TriangularSTF, HalfSinusoidSTF
+except ImportError as e:
+    print 'CHANGE BRANCHES'
+    raise e
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 pjoin = os.path.join
@@ -88,10 +94,10 @@ def ax_if_needed(ax):
     return ax
 
 
-def plot_traces(tr, ax=None, label='', color='r'):
+def plot_traces(tr, t_shift=0, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     if tr:
-        ax.plot(tr.get_xdata(), tr.get_ydata(), label=label, color=color)
+        ax.plot(tr.get_xdata()+t_shift, tr.get_ydata(), label=label, color=color)
     ax.set_xlabel('time [s]')
     ax.set_ylabel('displ [m]')
 
@@ -159,14 +165,39 @@ def extract(fxfy, upper_lim=0., lower_lim=99999.):
     return fxfy[:, indx].reshape(2, len(indx.T))
 
 
+def M02tr(Mo, stress, vr):
+    #stress=stress drop in MPa
+    #vr=rupture velocity in m/s
+    #Mo = seismic moment calculated with Hanks and Kanamori,1979    
+    #Mo=(10.**((3./2.)*(Mw+10.73))/1E+7 #Mo in Nm
+    #Calculate rupture length or source radio (m) with Madariaga(1976), stress drop on a circular fault
+    Lr = ((7.*Mo)/(16.*stress*1E+6))**(1./3.) #stress Mpa to Nm2
+    #Calculate ruputure time in seconds with the rupture velocity
+    tr = Lr/vr
+    return tr
+
+
+def get_stf(magnitude, stress=0.1, vr=2750, type='boxcar'):
+    Mo = moment_tensor.magnitude_to_moment(magnitude)
+    duration = M02tr(Mo, stress, vr)
+    if type=='boxcar':
+        stf = BoxcarSTF(duration=duration)
+    elif type=='triangular':
+        stf = TriangularSTF(duration=duration)
+    elif type=='halfsin':
+        stf = HalfSinusoidSTF(duration=duration)
+    else:
+        raise Exception('unknown STF type: %s' % type)
+    return stf
+
+
 class DCSourceWid(DCSource):
-    store_id = String.T(optional=True, default=None)
+    id = String.T(optional=True, default=None)
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
 
 
 class HaskellSourceWid(RectangularSource):
-    #store_id = String.T(optional=True, default=None)
     id = String.T(optional=True, default=None)
     attitude = String.T(optional=True, default=None)
 
@@ -240,7 +271,7 @@ class Spectra(DDContainer):
             ax.axvline(fmin)
         elif fmax:
             ax.axvline(fmax)
-        
+
         i_fail = 0
         for tracer, fxfy in self.spectra:
             if fxfy is None:
@@ -312,6 +343,7 @@ class SyntheticCouple():
 
         self.repeat = 0
         self.noise_level = 0
+        self.invert_data = None
 
     def process(self, **pp_kwargs):
         for tracer in self.master_slave:
@@ -340,11 +372,15 @@ class SyntheticCouple():
     def plot(self, colors, **kwargs):
         fig = plt.figure(figsize=(3, 6))
         ax = fig.add_subplot(4, 1, 2)
-        self.spectra.plot_all(ax, colors=colors, legend=False, fmin=self.fmin,
+        self.spectra.plot_all(ax,
+                              colors=colors,
+                              legend=False,
+                              fmin=self.fmin,
                               fmax=self.fmax)
-        self.noisy_spectra.plot_all(ax, colors=colors, alpha=0.05, legend=False)
-        #legend_clear_duplicates(ax)
-        
+        if self.invert_data:
+            Q = self.invert_data[-1]
+        ax.text(0.01, 0.01, "Q=%1.1f" % Q, verticalalignment='bottom', horizontalalignment='left',
+                transform=ax.transAxes)
         '''
         # Q model right panel:
         ax = fig.add_subplot(3, 2, 2)
@@ -360,12 +396,21 @@ class SyntheticCouple():
             ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
                        color=colors[tr])
         '''
-        #if not kwargs.get('no_legend', False):
-        #    ax.legend()
         ax = fig.add_subplot(4, 1, 1)
+        yshift=0
         for tracer in self.master_slave:
-            plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
-                        ax=ax, label=tracer.label(), color=colors[tracer])
+            tr = tracer.processed
+            #plot_traces(tr=tracer.process(normalize=kwargs.get('normalize', False)),
+            otime = tracer.source.time
+            plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color=colors[tracer])
+            info_str = "otime: %s, mag: %1.1f, codes: %s, phase: %s" % (util.time_to_str(otime),
+                                                                     tracer.source.magnitude,
+                                                                     ".".join(tracer.target.codes),
+                                                                        tracer.chopper.startphasestr)
+
+            ax.text(0.01, 0.01+yshift, info_str, verticalalignment='bottom', horizontalalignment='left',
+                    transform=ax.transAxes)
+            yshift = 0.07
 
         #if self.noise_level!=0.:
         #    trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
@@ -546,8 +591,8 @@ class QInverter:
     def invert(self):
         self.allqs = []
         self.ratios = []
-        self.p_values = []
-        self.stderrs = []
+        #self.p_values = []
+        #self.stderrs = []
         widgets = ['regression analysis', progressbar.Percentage(), progressbar.Bar()]
         pb = progressbar.ProgressBar(maxval=len(self.couples)-1, widgets=widgets).start()
         for i_c, couple in enumerate(self.couples):
@@ -561,13 +606,13 @@ class QInverter:
                 continue
             couple.invert_data = (dt, fx, slope, interc, num.log(fy_ratio), Q)
             self.allqs.append(Q)
-            self.p_values.append(p_value)
-            self.stderrs.append(stderr)
+            #self.p_values.append(p_value)
+            #self.stderrs.append(stderr)
         pb.finish()
 
     def plot(self, ax=None, q_threshold=None):
         fig = plt.figure(figsize=(5,6))
-        ax = fig.add_subplot(111)
+        ax = fig.add_subplot(1,2,1)
         median = num.median(self.allqs)
         if q_threshold is not None:
             filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
@@ -575,10 +620,20 @@ class QInverter:
             filtered = self.allqs
         ax.hist(filtered, bins=100)
         txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
+
+        ax = fig.add_subplot(1,2,2)
         ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
-        #for couple in self.couples:
-        #   dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
-        #   ax.plot(fx, interc+slope*fx)
+        c_m = mpl.cm.coolwarm
+        norm = mpl.colors.Normalize(vmin=0, vmax=len(self.couples))
+        s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
+        s_m.set_array([])
+        for i_couple, couple in enumerate(self.couples):
+            c = s_m.to_rgba(i_couple)
+            if couple.invert_data == None:
+                continue
+            dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
+            ax.plot(fx, interc+slope*fx, alpha=0.1, color=c)
+            ax.plot(fx, log_fy_ratio, alpha=0.1, color=c)
 
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
@@ -611,7 +666,7 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     minx = min(minx.min(), -100)-100
     maxx = max(maxx.max(), 100)+100
     xlims=(minx, maxx)
-    ylims=(miny, maxy)
+    ylims=(min(miny), max(maxy))
     model_plot(background_model, ax=ax, parameter=parameter, xlims=xlims)
     ax.set_xlim(xlims)
     ax.set_ylim(ylims)
@@ -1248,18 +1303,29 @@ def invert_test_2D_parallel(noise_level=0.001):
     p_chopper = Chopper('first(p|P)', fixed_length=0.4, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
 
-    sources = [HaskellSourceWid(lat=float(lat),
-                          lon=float(lon),
-                          depth=sd,
-                          strike=strike,
-                          dip=dip,
-                          rake=rake,
-                          magnitude=.5,
-                          length=0.,
-                          width=0.,
-                          risetime=0.02,
-                          id='0%i'%(sd/1000.),
-                          attitude='master') for sd in source_depths]
+    #sources = [HaskellSourceWid(lat=float(lat),
+    #                      lon=float(lon),
+    #                      depth=sd,
+    #                      strike=strike,
+    #                      dip=dip,
+    #                      rake=rake,
+    #                      magnitude=.5,
+    #                      length=0.,
+    #                      width=0.,
+    #                      risetime=0.02,
+    #                      id='0%i'%(sd/1000.),
+    #                      attitude='master') for sd in source_depths]
+    magnitude = 2.
+
+    sources = [DCSourceWid(lat=float(lat),
+                        lon=float(lon),
+                        depth=sd,
+                        strike=strike,
+                        dip=dip,
+                        rake=rake,
+                        magnitude=.5,
+                        stf=get_stf(magnitude),
+                        ) for sd in source_depths]
     pairs = []
 
     for i in xrange(len(d1s)):
@@ -1474,15 +1540,16 @@ das deltat > 0.06 sekunden naemlich hinfaellig sein.'''
 def reset_events(markers, events):
     for e in events:
         marks = filter(lambda x: x.get_event_time()==e.time, markers)
-        for m in marks:
-            m.set_event(e)
+        map(lambda x: x.set_event(e), marks)
 
 def s2t(s, channel='Z'):
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation,
                   codes=(s.network, s.station, s.location, channel))
 
 def e2s(e):
-    return Source.from_pyrocko_event(e)
+    s = SourceWithMagnitude.from_pyrocko_event(e)
+    s.magnitude = e.magnitude
+    return s
 
 
 def apply_webnet():
@@ -1490,45 +1557,67 @@ def apply_webnet():
     builder = Builder()
     method = 'mtspec'
     fmin = 40
-    fmax = 100.
+    fmax = 89.
+    min_magnitude = -10
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
-    markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
-    events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
+    #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    markers = PhaseMarker.load_markers('/data/meta/webnet_reloc/hypo_dd_markers.pf')
+    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    events = filter(lambda x: x.magnitude>= min_magnitude, events)
+    print '%s events'% len(events)
     reset_events(markers, events)
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
-    channel = 'SHZ'
-    want_phase = 'P'
+    want_phase = 'S'
+    #window_length = {'S': 0.4, 'P': 0.1}
+    #phase_position = {'S': 0.2, 'P': 0.2}
+    window_length = {'S': 0.4, 'P': 0.4}
+    phase_position = {'S': 0.2, 'P': 0.2}
+
+    channels = {'P': 'SHZ', 'S': 'SHN' }
+    channel = channels[want_phase]
     pie.process_markers(phase_selection=want_phase, stations=stations, channel=channel)
-    p_chopper = Chopper(startphasestr=want_phase, fixed_length=0.2, phase_position=0.5, phaser=pie)
+    p_chopper = Chopper(
+        startphasestr=want_phase, fixed_length=window_length[want_phase],
+        phase_position=phase_position[want_phase], phaser=pie)
     tracers = []
     load_coupler = True
-    fn_coupler = 'webnet_pairing.yaml'
-    #fn_mseed = '/media/usb/webnet/gse2/2008Oct'
-    print 'incomplete data set!'
+    fn_coupler = 'webnet_pairing_%s.yaml' % want_phase
     fn_mseed = '/media/usb/webnet/mseed'
+    ignore = ['*.STC.*.SHZ']
+
     data_pile = pile.make_pile(fn_mseed)
-    # webnet sources
-    sources = [e2s(e) for e in events]
-    sources = sources[0:200]
+    if data_pile.tmax==None or data_pile.tmin == None:
+        raise Exception('failed reading mseed')
 
     # webnet Z targets:
     targets = [s2t(s, channel) for s in stations]
     if load_coupler:
         filtrate = Filtrate.load(filename=fn_coupler)
+        sources = filtrate.sources
         coupler = Coupler(filtrate)
     else:
         coupler = Coupler()
-        coupler.process(sources, targets, mod, ['p', 'P'], ignore_segments=True, dump_to=fn_coupler)
+        sources = [e2s(e) for e in events]
+        coupler.process(sources, targets, mod, [want_phase, want_phase.lower()], ignore_segments=True, dump_to=fn_coupler)
 
+    print '%s sources' %len(sources)
     fig, ax = Animator.get_3d_ax()
-    pairs_by_rays = coupler.filter_pairs(4., 600, data=coupler.filtrate)
+    pairs_by_rays = coupler.filter_pairs(4., 1000, data=coupler.filtrate, ignore=ignore)
     paired_sources = []
+    paired_source_dict = {}
     for p in pairs_by_rays:
         s1, s2, t, td, pd = p
         paired_sources.extend([s1, s2])
-    Animator.plot_sources(sources=paired_sources, reference=coupler.hookup, ax=ax, alpha=0.01)
-    #animator = Animator(pairs_by_rays)
+    for s in paired_sources:
+        if not s in paired_source_dict.keys():
+            paired_source_dict[s] = 1
+        else:
+            paired_source_dict[s] += 1
+
+    #Animator.plot_sources(sources=paired_sources, reference=coupler.hookup, ax=ax, alpha=0.01)
+    Animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=ax, alpha=1)
     #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
     #for i_r, r in enumerate(pairs_by_rays):
     #    e1, e2, t, td, pd, segments = r
@@ -1536,13 +1625,14 @@ def apply_webnet():
     #    pb.update(i_r)
     #print 'done'
     #pb.finish()
-    plt.show()
     pairs = []
 
     for r in pairs_by_rays:
         s1, s2, t, td, pd = r
-        tracer1 = DataTracer(data_pile=data_pile, source=s1, target=t, chopper=p_chopper, channel=channel)
-        tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t, chopper=p_chopper, channel=channel)
+        tracer1 = DataTracer(
+            data_pile=data_pile, source=s1, target=t, chopper=p_chopper, channel=channel)
+        tracer2 = DataTracer(
+            data_pile=data_pile, source=s2, target=t, chopper=p_chopper, channel=channel)
         pair = [tracer1, tracer2]
         tracers.extend(pair)
         pairs.append(pair)
@@ -1563,16 +1653,16 @@ def apply_webnet():
         testcouple.process()
         if testcouple.good:
             testcouples.append(testcouple)
-            #testcouple.plot(infos=infos, colors=colors, fmin=fmin, fmax=fmax)
     pb.finish()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
     inverter = QInverter(couples=testcouples)
     inverter.invert()
-    inverter.plot(q_threshold=100)
+    for tc in testcouples[:20]:
+        tc.plot(infos=infos, colors=colors, fmin=fmin, fmax=fmax)
+    inverter.plot(q_threshold=200)
     fig = plt.gcf()
     fig.savefig('hist_databasetest.png', dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    plt.show()
 
 
 if __name__=='__main__':
@@ -1582,10 +1672,11 @@ if __name__=='__main__':
     # DIESER:
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
-    #invert_test_2D_parallel(noise_level=0.01)
+    invert_test_2D_parallel(noise_level=0.01)
     #dbtest(noise_level=0.001)
     # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
-    apply_webnet()
+    #apply_webnet()
+    plt.show()
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
