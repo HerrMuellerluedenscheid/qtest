@@ -619,7 +619,7 @@ def qp_model_test():
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -732,7 +732,7 @@ def vp_model_test():
             new_mod.append(layer)
         models.append(new_mod)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -823,7 +823,7 @@ def invert_test_1():
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -937,7 +937,7 @@ def invert_test_2(noise_level=0.01):
     rake = -30.
     source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
 
-    target_kwargs = {'elevation': 0,
+    target_kwargs = {'elevation': 0.,
                      'codes': ('', 'KVC', '', 'Z'),
                      'store_id': None}
 
@@ -1067,7 +1067,7 @@ def invert_test_2D(noise_level=0.001):
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
+        'elevation': 0., 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
 
     targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
     logger.info('Using %s targets' % (len(targets)))
@@ -1217,7 +1217,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
+        'elevation': 0., 'codes': ('', 'KVC', '', 'Z'), 'store_id': None}
 
     #targets = xy2targets(x_targets, y_targets, lat, lon, 'Z',  **target_kwargs)
     #logger.info('Using %s targets' % (len(targets)))
@@ -1345,19 +1345,19 @@ def dbtest(noise_level=0.001):
     mod = config.earthmodel_1d
     component = 'Z'
     target_kwargs = {
-        'elevation': 0, 'codes': ('', 'KVC', '', component), 'store_id': store_id}
+        'elevation': 0., 'codes': ('', 'KVC', '', component), 'store_id': store_id}
     targets = [Target(lat=lat, lon=lon, **target_kwargs)]
     p_chopper = Chopper('first(p|P)', fixed_length=0.8, phase_position=0.5,
                         phaser=PhasePie(mod=mod))
     tracers = []
-    #source_depths = num.arange(10100, 14000, 200)
-    #distances = num.arange(28000., 32000., 200)
+    source_depths = num.arange(10100, 14000, 500)
+    distances = num.arange(28000., 32000., 500)
     #source_depths = num.arange(10100, 14000, 500)
-    source_depths = num.arange(1000, 1100, 20)
-    source_depths = map(float, source_depths)
-    distances = num.arange(200., 300., 20)
-    #distances = num.arange(28000., 32000., 1000)
-    distances = map(float, distances)
+    #source_depths = num.arange(1000, 1100, 20)
+    #source_depths = map(float, source_depths)
+    #distances = num.arange(200., 300., 20)
+    ##distances = num.arange(28000., 32000., 1000)
+    #distances = map(float, distances)
     #source_depths = num.arange(config.source_depth_min,
     #                           config.source_depth_max+config.source_depth_delta,
     #                           config.source_depth_delta*4)
@@ -1372,10 +1372,10 @@ def dbtest(noise_level=0.001):
         sources.extend([ExplosionSource(
             lat=float(lat),
             lon=float(lon),
-            depth=sd,
+            depth=float(sd),
             magnitude=0.,
-            north_shift=d,
-            east_shift=d) for sd in source_depths])
+            north_shift=float(d),
+            east_shift=float(d)) for sd in source_depths])
 
     from distance_point2line import Coupler, Animator
     coupler = Coupler()
@@ -1388,17 +1388,17 @@ def dbtest(noise_level=0.001):
     print '''Das kann nicht ganz hinkommen. 2000m minimum distance. Dann muesste
 das deltat > 0.06 sekunden naemlich hinfaellig sein.'''
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
-    pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
-    for i_r, r in enumerate(pairs_by_rays):
-        e1, e2, t, td, pd, segments = r
-        Animator.plot_ray(segments, ax=ax)
-        pb.update(i_r)
-    print 'done'
-    pb.finish()
-    plt.show()
+    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    #for i_r, r in enumerate(pairs_by_rays):
+    #    e1, e2, t, td, pd, segments = r
+    #    Animator.plot_ray(segments, ax=ax)
+    #    pb.update(i_r)
+    #print 'done'
+    #pb.finish()
+    #plt.show()
     pairs = []
     for r in pairs_by_rays:
-        t, s1, s2, segments = r
+        s1, s2, t  = r[0:3]
         tracer1 = Tracer(s1, t, p_chopper, component=component)
         tracer2 = Tracer(s2, t, p_chopper, component=component)
         pair = [tracer1, tracer2]
