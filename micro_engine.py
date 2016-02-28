@@ -21,7 +21,7 @@ import progressbar
 pjoin = os.path.join
 
 logger = logging.getLogger()
-
+diff_response = trace.DifferentiationResponse()
 
 
 def add_noise(t, level):
@@ -138,7 +138,6 @@ class Builder:
             file_path = pjoin(self.cache_dir, self.config_str[str(tr.config)], fn)
             tr.read_files(file_path)
             found_cache = True
-
         elif self.cache_dir and not load:
             tmpdir = tempfile.mkdtemp(dir=self.cache_dir)
             tr.config.dump(filename=pjoin(tmpdir, self.configfn))
@@ -169,6 +168,8 @@ class Builder:
 
         return traces
 
+def _do_nothing(x):
+    return x
 
 class Tracer:
     def __init__(self, source, target, chopper, channel='v', *args, **kwargs):
@@ -176,12 +177,23 @@ class Tracer:
         self.runner = None
         self.source = source
         self.target = target
+        self.tinc = kwargs.pop('tinc', None)
         self.config = kwargs.pop('config', None)
         self.traces = None
         self.processed = False
         self.chopper = chopper
         self.kwargs = kwargs
         self.channel = channel
+        self.want = kwargs.pop('want', 'displacement')
+        self.fmin = kwargs.pop('fmin', -99999.)
+        self.fmax = kwargs.pop('fmax', 99999.)
+
+        if self.want == 'velocity':
+            self._apply_transfer = self.differentiate
+        elif self.want == 'displacement':
+            self._apply_transfer = _do_nothing
+        else:
+            raise Exception('unknown wanted quantity: %s' % self.want)
 
         if not self.target.store_id and not self.kwargs.pop('no_config', False):
             self.config.receiver_distances = [source.distance_to(target)/1000.]
@@ -197,10 +209,16 @@ class Tracer:
     def setup_data(self):
         return False
 
+    def differentiate(self, tr):
+        t = tr.tmax - tr.tmin
+        sr = 1./tr.deltat
+        return tr.transfer(transfer_function=diff_response, freqlimits=(t, t*1.1, sr*0.5, sr*0.95), tfade=t*0.1)
+
     def setup_from_engine(self, engine=None):
         if engine and self.target.store_id:
             response = engine.process(sources=[self.source], targets=[self.target])
-            self.traces = response.pyrocko_traces()
+            traces = response.pyrocko_traces()
+            self.traces = traces
             #self.traces = rotate_rtz(self.traces)
             self.config = engine.get_store_config(self.target.store_id)
             return True
@@ -211,17 +229,15 @@ class Tracer:
         if not tr:
             tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
+            tr = self._apply_transfer(tr)
         self.processed = tr
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
         if normalize:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
-        if response:
-            #tr1 = tr.copy()
-            #tr = tr.transfer(transfer_function=response)
-            tr = response.convolve(tr)
-            #trace.snuffle([tr1, tr])
+        #if response:
+        #    tr = tr.transfer(transfer_function=response)
         if noise:
             tr = noise.noisify(tr)
 
@@ -277,7 +293,9 @@ class DataTracer(Tracer):
 
 class Chopper():
     def __init__(self, startphasestr=None, endphasestr=None, fixed_length=None,
-                 phase_position=0.5, xfade=0.0, phaser=None):
+                 by_magnitude=None, phase_position=0.5, xfade=0.0, phaser=None):
+        assert None in [fixed_length, by_magnitude]
+        self.by_magnitude = by_magnitude
         self.phase_pie = phaser or PhasePie()
         self.startphasestr = startphasestr
         self.endphasestr = endphasestr
@@ -290,17 +308,19 @@ class Chopper():
         dist = s.distance_to(t)
         depth = s.depth
         tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
-        if self.endphasestr!=None and self.fixed_length==None:
+        if self.endphasestr!=None:
             tend = self.phase_pie.t(self.endphasestr, (depth, dist))
-        elif self.endphasestr==None and self.fixed_length!=None:
+        elif self.fixed_length!=None:
             tend = self.fixed_length+tstart
+        elif self.by_magnitude!=None:
+            tend = tstart+self.by_magnitude(s.magnitude)
         else:
             raise Exception('Need to define exactly one of endphasestr and fixed length')
         tr_bkp = tr
         tr = tr.copy()
         tr.set_location('cp')
         tstart, tend = self.setup_time_window(tstart, tend)
-        tr.chop(tstart-self.get_tfade(trange), tend+self.get_tfade(trange))
+        tr.chop(tstart, tend)
         self.chopped.add(s, t, tr)
         return tr
 
