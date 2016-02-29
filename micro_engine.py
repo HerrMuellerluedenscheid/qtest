@@ -211,14 +211,14 @@ class Tracer:
 
     def differentiate(self, tr):
         t = tr.tmax - tr.tmin
-        sr = 1./tr.deltat
-        return tr.transfer(transfer_function=diff_response, freqlimits=(t, t*1.1, sr*0.5, sr*0.95), tfade=t*0.1)
+        sr = 0.5/tr.deltat
+        return tr.transfer(transfer_function=diff_response, freqlimits=(1./t, 1.1/t, sr*0.7, sr*0.9), tfade=t*0.15)
 
     def setup_from_engine(self, engine=None):
         if engine and self.target.store_id:
             response = engine.process(sources=[self.source], targets=[self.target])
             traces = response.pyrocko_traces()
-            self.traces = traces
+            self.traces = [self.differentiate(t) for t in  traces]
             #self.traces = rotate_rtz(self.traces)
             self.config = engine.get_store_config(self.target.store_id)
             return True
@@ -328,14 +328,17 @@ class Chopper():
         tstart = self.phase_pie.t(self.startphasestr, (source, target))
         if not tstart:
             return tstart
-        tend = self.fixed_length + tstart
+        if self.by_magnitude!=None:
+            tend = tstart+self.by_magnitude(source.magnitude)
+        else:
+            tend = self.fixed_length + tstart
         tstart, tend = self.setup_time_window(tstart, tend)
         select = lambda x: x.nslc_id == target.codes
 
         # A little dangerous:
         try:
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
-        except IndexError:
+        except IndexError as e:
             tr = None
         self.chopped.add(source, target, tr) 
         return tr
