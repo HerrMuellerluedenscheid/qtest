@@ -8,20 +8,56 @@ from pyrocko import trace
 from pyrocko import guts
 from pyrocko import io
 from pyrocko import util
-from pyrocko.gf import meta, Engine, Target, DCSource
+from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
+from pyrocko.guts import Float
 from autogain.autogain import PhasePie, PickPie
 import time
 import argparse
 import logging
 import multiprocessing
 import progressbar
+from rupture_size import radius as source_radius
+
 
 pjoin = os.path.join
 
 logger = logging.getLogger()
 diff_response = trace.DifferentiationResponse()
+
+
+class EvalrespFilter(Filter):
+    response = trace.Evalresp.T()
+    #def __init__(self, response):
+    #    Filter.__init__(self)
+
+
+def associate_responses(directory, targets, time=0):
+    '''
+    :param instant: time for which response to be evaluated
+    '''
+    fns = glob.glob(directory)
+    if len(fns)==0:
+        logger.warn('no files found: %s',  directory)
+    for fn in fns:
+        codes = tuple(fn.split('/')[-1].split('.')[1:])
+        logger.warn('Frage an Sebastian: Was soll das target, bzw. wie herum benutzen?')
+        response = trace.Evalresp(respfile=fn,
+                                    nslc_id=codes,
+                                    target='dis',
+                                    time=time)
+        for t in targets:
+            if t.codes==codes:
+                t.filter = EvalrespFilter(response=response)
+                logger.info('resp-file: %s <---> target: %s' %(codes, t.codes))
+                break
+        else:
+            logger.info('resp-file: %s unassociated' % str(codes))
+    
+    for t in targets:
+        if not t.filter:
+            logger.warn('Target %s does not carry response info' % str(t.codes))
 
 
 def add_noise(t, level):
@@ -69,6 +105,51 @@ class DDContainer():
             values.append(v)
 
         return keys1, keys2, values
+
+
+def WEBNETMl2M0(Ml):
+    # for WEBNET events 2000 swarm
+    # Horalek, Sileny 2015
+    return 10**(1.12*Ml)
+
+
+#class Brune(trace.FrequencyResponse):
+#    '''
+#    Brunes source model type
+#
+#    as in Lion Krischer's moment_magnitude_calculator:
+#    https://github.com/krischer/moment_magnitude_calculator
+#    '''
+#    duration = Float.T()
+#    #sampling_rate = Float.T()
+#    variation_signal = Float.T()
+#    stress_drop = Float.T(default=2.9E6, optional=True, help='')
+#    shear_module = Float.T()
+#    v_s = Float.T()
+#    depth = Float.T()
+#    distance = Float.T()
+#
+#
+#    def evaluate(self, freqs):
+#        mu = self.vs**2 * self.rho
+#        # freqs in rad/s ????
+#        b = num.zeros(len(freqs))
+#        b[:] = self.b
+#        return self.stressdrop*self.vs/ mu / (freqs**2 + b**2)
+#
+#    @property
+#    def b(self):
+#        print self.magnitude, self.a
+#        return 2.33*self.vs / self.a
+#
+#    @property
+#    def a(self):
+#        return source_radius([self.magnitude])
+#
+#    def discretize_t(self, deltat, tref):
+#        t = num.linspace(0, self.duration, self.duration * 1./deltat)
+#        return t, 2.0 * self.variation_signal * self.stress_drop / self.shear_module * self.v_s * \
+#                    self.distance / self.depth * t * num.exp(-2.34 * (self.v_s / self.distance) * t)
 
 
 class Builder:
@@ -214,11 +295,22 @@ class Tracer:
         sr = 0.5/tr.deltat
         return tr.transfer(transfer_function=diff_response, freqlimits=(1./t, 1.1/t, sr*0.7, sr*0.9), tfade=t*0.15)
 
+    def simulate(self, tr):
+        return tr.transfer(transfer_function=self.target.filter.response)
+
     def setup_from_engine(self, engine=None):
         if engine and self.target.store_id:
             response = engine.process(sources=[self.source], targets=[self.target])
             traces = response.pyrocko_traces()
-            self.traces = [self.differentiate(t) for t in  traces]
+            processed = []
+            for tr in traces:
+                if self.source.brunes:
+                    self.source.brunes.preset(source=self.source, target=self.target)
+                    tr = tr.transfer(transfer_function=self.source.brunes)
+                tr = self.simulate(tr)
+                processed.append(tr)
+            self.traces = processed
+
             #self.traces = rotate_rtz(self.traces)
             self.config = engine.get_store_config(self.target.store_id)
             return True
