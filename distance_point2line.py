@@ -70,7 +70,7 @@ class Coupler():
         self.hookup = None
         self.filtrate = filtrate
 
-    def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False):
+    def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False, check_relevance_by=False):
         self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
         phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
         pb = progressbar.ProgressBar(maxval=len(sources)).start()
@@ -81,6 +81,9 @@ class Coupler():
         passed = 0
         for i_e, ev in enumerate(sources):
             for i_t, t in enumerate(targets):
+                if not self.is_relevant(ev, t, check_relevance_by):
+                    continue
+
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
                 try:
                     n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
@@ -110,11 +113,17 @@ class Coupler():
         print 'failed: %s, passed:%s ' % (failed, passed)
         if dump_to:
             self.filtrate.validate()
-            print 'valid'
-            self.filtrate.regularize()
             self.filtrate.dump(filename=dump_to)
 
-    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data, ignore=[]):
+    def is_relevant(self, source, target, p):
+        if p==False or p ==None:
+            return True
+        else:
+            return p.relevant(
+                source.time, source.time+20,
+                trace_selector=lambda x: (x.station==target.codes[1]))
+
+    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data, ignore=[], max_mag_diff=100):
         filtered = []
         has_segments = True
         if isinstance(data, Filtrate):
@@ -125,6 +134,9 @@ class Coupler():
                 e1, e2, t, traveled_d, passing_d, segments = r
             else:
                 e1, e2, t, traveled_d, passing_d = r
+            if abs(e1.magnitude-e2.magnitude)>max_mag_diff:
+                continue
+
             if util.match_nslcs(ignore, [t.codes]):
                 continue
 
@@ -278,7 +290,9 @@ def array_center(stations):
         lats.append(s.lat)
         lons.append(s.lon)
         depths.append(s.depth)
-    return gf.meta.Location(lat=num.mean(lats), lon=num.mean(lons), depth=num.mean(depths))
+    return gf.meta.Location(lat=float(num.mean(lats)),
+                            lon=float(num.mean(lons)),
+                            depth=float(num.mean(depths)))
 
 
 def project2enz(arrival, azimuth_deg):

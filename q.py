@@ -22,9 +22,11 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
 import os
-from micro_engine import DataTracer, Tracer, Builder
+from micro_engine import DataTracer, Tracer, Builder#, Brunes
 from micro_engine import add_noise, RandomNoise, Chopper, DDContainer
+from micro_engine import associate_responses
 from autogain.autogain import PhasePie, PickPie
+from brune import Brune
 import logging
 from distance_point2line import Coupler, Animator, Filtrate
 try:
@@ -177,8 +179,7 @@ def M02tr(Mo, stress, vr):
     tr = Lr/vr
     return tr
 
-
-def get_stf(magnitude, stress=0.1, vr=2750, type='halfsin'):
+def get_stf(magnitude=0, stress=0.1, vr=2750., type=None):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
     duration = M02tr(Mo, stress, vr)
     if type=='boxcar':
@@ -187,6 +188,8 @@ def get_stf(magnitude, stress=0.1, vr=2750, type='halfsin'):
         stf = TriangularSTF(duration=duration)
     elif type=='halfsin':
         stf = HalfSinusoidSTF(duration=duration)
+    elif type=='brunes':
+        stf = None
     else:
         raise Exception('unknown STF type: %s' % type)
     return stf
@@ -194,6 +197,7 @@ def get_stf(magnitude, stress=0.1, vr=2750, type='halfsin'):
 
 class DCSourceWid(DCSource):
     id = String.T(optional=True, default=None)
+    brunes = Brune.T(optional=True, default=None)
     def __init__(self, **kwargs):
         DCSource.__init__(self, **kwargs)
         #self.stf = get_stf(self.magnitude)
@@ -325,6 +329,7 @@ class Spectra(DDContainer):
             ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
             count += 1
+
         ax.autoscale()
         ax.set_title("$\sqrt{PSD}$")
         ax.set_ylabel("A")
@@ -336,56 +341,6 @@ class Spectra(DDContainer):
             func=self.fit_function
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
-
-
-    #def T(self):
-    #    tracers = []
-    #    fxfys = []
-    #    for tr, f in self.spectra:
-    #        tracers.append(tr)
-    #        fxfys.append(f)
-    #    return tracers, fxfys
-
-    #def ratio(self):
-    #    '''Ratio of two overlapping spectra.
-
-    #    i is the mean intercept.
-    #    s is the slope ratio of each individual linregression.'''
-    #    #assert len(couple.spectra.spectra)==2
-    #    tracers, fxfy = self.T()
-
-    #    fmin = max(tracers[0].fmin, tracers[1].fmin)
-    #    fmax = min(tracers[0].fmin, tracers[1].fmin)
-
-    #    fx = []
-    #    fy = []
-    #    s = None
-    #    print '.................'
-    #    for tr, fxfy in couple.spectra.spectra:
-    #        fs, a = fxfy
-    #        fmin = max(tr.fmin, fs.min())
-    #        fmax = min(tr.fmax, fs.max())
-    #        ind = limited_frequencies_ind(fmin, fmax, fs)
-    #        slope, interc, r, p, std = linregress(fs[ind], num.log(a[ind]))
-    #        print fmax-fmin, r, p, std
-    #        if not s:
-    #            i = interc
-    #            s = slope
-    #        else:
-    #            i += interc
-    #            s -= slope
-    #        fx.append(fs)
-    #        #fy.append(fxfy[1])
-
-    #    return i/2., num.exp(s), num.sort(num.hstack(fx))
-    #    #ind0 = limited_frequencies_ind(fmin, fmax, fx[0])
-    #    #ind1 = limited_frequencies_ind(fmin, fmax, fx[1])
-    #    #assert all(fx[0][ind0]==fx[1][ind0])
-    #    #fy_ratio = fy[0][ind0]/fy[1][ind1]
-    #    #return fx[0][ind0], fy_ratio
-
-
-
 
 
 class TracerColor():
@@ -651,6 +606,28 @@ def noisy_spectral_ratios(pairs):
         ratios.append(fy_ratio)
         indxs.append(one[i][0][ind0])
     return indxs, ratios
+
+
+def spectral_ratio_old(couple):
+    '''Ratio of two overlapping spectra'''
+    assert len(couple.spectra.spectra)==2
+    fx = []
+    fy = []
+    cfmin = max([couple.spectra.spectra[1][0].fmin, couple.spectra.spectra[0][0].fmin])
+    cfmax = min([couple.spectra.spectra[1][0].fmax, couple.spectra.spectra[0][0].fmax])
+
+    for tr, fxfy in couple.spectra.spectra:
+        fs, a = fxfy
+        fx.append(fxfy[0])
+        fy.append(fxfy[1])
+
+    ind0 = limited_frequencies_ind(cfmin, cfmax, fx[0])
+    ind1 = limited_frequencies_ind(cfmin, cfmax, fx[1])
+    assert all(fx[0][ind0]==fx[1][ind1])
+    fy_ratio = fy[0][ind0]/fy[1][ind1]
+    #return fx[0][ind0], fy_ratio
+    slope, interc, r, p, std = linregress(fx[0][ind0], fy_ratio)
+    return interc, slope, fx[0][ind0]
 
 
 def spectral_ratio(couple):
@@ -1601,31 +1578,42 @@ def dbtest(noise_level=0.001):
     lon = 12.5152
     sources = []
     method = 'mtspec'
-    fminrange = 10.
-    use_common = True
-    fmax = 85.
-    window_by_magnitude = Magnitude2Window.setup(0.2, 1.)
-    #window_by_magnitude = Magnitude2Window.setup(0.1, 5.)
-    fmin_by_magnitude = Magnitude2fmin.setup()
+    fminrange = 20.
+    use_common = False
+    fmax = 80.
+    fmin = 30.
+    window_by_magnitude = Magnitude2Window.setup(0.3, 3.)
+    #window_by_magnitude = Magnitude2Window.setup(0.2, 5.)
+    fmin_by_magnitude = Magnitude2fmin.setup(lim=fmin)
     #store_id = 'qplayground_invtest7'
     #store_id = 'qplayground_30000m_2'
     #store_id = 'qplayground_30000m_waveform_sampling5'
     #store_id = 'qplayground_30000m_simple3'
     #store_id = 'qplayground_30000m_continuous2'
     #store_id = 'qplayground_10000m_continuous2'
-    store_id = 'qplayground_10000m_continuous2_q800'
-
+    #store_id = 'qplayground_10000m_continuous2_q800'
+    store_id = 'qplayground_10000m_continuous2_noflatearth'
+    strikemin = 160
+    strikemax = 180
+    dipmin = -60
+    dipmax = -80
+    rakemin = 20
+    rakemax = 40
     engine = LocalEngine(store_superdirs=['/data/stores'])
     store = engine.get_store(store_id)
     config = engine.get_store_config(store_id)
     mod = config.earthmodel_1d
-    channel = 'Z'
+    plot_model(mod, parameters=['vp', 'qp'])
+    channel = 'SHZ'
     target_kwargs = {
-        'elevation': 0., 'codes': ('', 'KVC', '', channel), 'store_id': store_id}
+        #'elevation': 0., 'codes': ('CZ', 'KVC', '', channel), 'store_id': store_id}
+        'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
     targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+    associate_responses('responses/RESP*', targets, time=util.str_to_time('2012-01-01 00:00:00.'))
     p_chopper = Chopper('first(p)', phase_position=0.4,
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
+    stf_type = 'brunes'
     tracers = []
     #source_depths = num.arange(10100, 13800, 300)
     source_depths = num.arange(8200, 11800, 300)
@@ -1635,7 +1623,13 @@ def dbtest(noise_level=0.001):
     want_phase = 'p'
     load_coupler = False
 
-    from distance_point2line import Coupler, Animator
+    if stf_type=='brunes':
+        # mu nachschauen!
+        # beta aus Modell
+        brunes = Brune(sigma=2.9E6, mu=3E10, beta=3400.)
+    else:
+        brunes = False
+
     if load_coupler:
         print 'load coupler'
         filtrate = Filtrate.load(filename=fn_coupler)
@@ -1647,26 +1641,30 @@ def dbtest(noise_level=0.001):
         for d in distances:
             d = num.sqrt(d**2/2.)
             for sd in source_depths:
-                mag =float(1.+num.random.random()*1.5)
-                #mag = float(1.)
+                mag = float(1.5+num.random.random()*2)
+                #mag = float(3.)
                 strike, dip, rake = moment_tensor.random_strike_dip_rake()
+                #strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
+                #                                                         dipmin, dipmax,
+                #                                                         rakemin, rakemax)
                 sources.append(DCSourceWid(
                     lat=float(lat),
                     lon=float(lon),
                     depth=float(sd),
                     magnitude=float(mag),
-                    stf=get_stf(mag),
                     strike=float(strike),
                     dip=float(dip),
                     rake=float(rake),
                     north_shift=float(d),
-                    east_shift=float(d)))
+                    east_shift=float(d),
+                    stf=get_stf(type=stf_type),
+                    brunes=brunes))
         coupler = Coupler()
         coupler.process(sources, targets, mod, [want_phase, want_phase.lower()], ignore_segments=True, dump_to=fn_coupler)
     fig, ax = Animator.get_3d_ax()
     #Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
     Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(20, 2000, data=coupler.filtrate)
+    pairs_by_rays = coupler.filter_pairs(10, 2000, data=coupler.filtrate, max_mag_diff=0.3)
     animator = Animator(pairs_by_rays)
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
     paired_sources = []
@@ -1724,10 +1722,11 @@ def dbtest(noise_level=0.001):
     inverter.invert()
     for testcouple in num.random.choice(testcouples, 10):
         testcouple.plot(infos=infos, colors=colors, noisy_Q=False)
-    inverter.plot(q_threshold=250)
+    inverter.plot(q_threshold=500)
     fig = plt.gcf()
     fig.savefig('hist_databasetest.png', dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
+    analyze(inverter.couples)
     plt.show()
 
 
@@ -1776,7 +1775,7 @@ def apply_webnet():
     want_phase = 'P'
     #window_length = {'S': 0.4, 'P': 0.4}
     window_by_magnitude = Magnitude2Window.setup(0.05, 2.5)
-    phase_position = {'S': 0.2, 'P': 0.2}
+    phase_position = {'S': 0.2, 'P': 0.25}
     #window_length = {'S': 0.4, 'P': 0.4}
     #phase_position = {'S': 0.2, 'P': 0.2}
 
@@ -1787,9 +1786,11 @@ def apply_webnet():
         startphasestr=want_phase, by_magnitude=window_by_magnitude,
         phase_position=phase_position[want_phase], phaser=pie)
     tracers = []
+
     load_coupler = True
     fn_coupler = 'dummy_webnet_pairing_%s.yaml' % want_phase
     #fn_coupler = 'webnet_pairing_%s.yaml' % want_phase
+
     fn_mseed = '/media/usb/webnet/mseed'
     ignore = ['*.STC.*.SHZ']
 
@@ -1810,7 +1811,7 @@ def apply_webnet():
 
     print '%s sources' %len(sources)
     fig, ax = Animator.get_3d_ax()
-    pairs_by_rays = coupler.filter_pairs(4., 1000, data=coupler.filtrate, ignore=ignore)
+    pairs_by_rays = coupler.filter_pairs(4., 1000, data=coupler.filtrate, ignore=ignore, max_mag_diff=0.5)
     #pairs_by_rays = pairs_by_rays[:200]
     paired_sources = []
     for p in pairs_by_rays:
@@ -1878,7 +1879,10 @@ def apply_webnet():
     fig.savefig('hist_databasetest.png', dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     couples = inverter.couples
+    analyze(couples)
 
+
+def analyze(couples):
     # by meanmag
     Qs = []
     mags = []
@@ -1899,16 +1903,18 @@ def apply_webnet():
     fig = plt.figure()
     ax = fig.add_subplot(2, 1, 1)
     ax.plot(mags, Qs, 'bo')
-    ax.set_ylim(0, 1000)
+    #ax.set_ylim(0, 2500)
+    ax.set_title('mean magnitude vs Q')
     ax = fig.add_subplot(2, 1, 2)
     ax.plot(magdiffs, Qs, 'bo')
-    ax.set_ylim(0, 1000)
+    #ax.set_ylim(0, 2500)
+    ax.set_title('magnitude difference vs Q')
 
     nrow = 3
     ncolumns = int(len(by_target)/nrow)+1
     fig = plt.figure()
     i = 0
-    q_threshold = 300
+    q_threshold = 2000
     for k, v in by_target.items():
         if len(v)<3:
             continue
