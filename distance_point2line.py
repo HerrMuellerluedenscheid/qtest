@@ -69,6 +69,7 @@ class Coupler():
         self.results = []
         self.hookup = None
         self.filtrate = filtrate
+        print 'phases in process obsolete'
 
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False, check_relevance_by=False):
         self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
@@ -306,11 +307,11 @@ def project2enz(arrival, azimuth_deg):
 def stats_by_station(results):
     hit_counter = {}
     for r in results:
-        s, e1, e2, segments = r
-        if not s in hit_counter:
-            hit_counter[s] = 1
+        s1, s2, t, p, td= r
+        if not t in hit_counter:
+            hit_counter[t] = 1
         else:
-            hit_counter[s] += 1
+            hit_counter[t] += 1
 
     return hit_counter
 
@@ -362,7 +363,7 @@ def hitcount_map_from_file(filename, stations=None, save_to='hitcount_map.png'):
                     bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
     ax.set_xlabel('longitude [$^\circ$]')
     ax.set_ylabel(save_to)
-    fig.savefig('hitcount_map.png')
+    fig.savefig('hitcount_map.png', dpi=200)
     plt.show()
 
 
@@ -417,26 +418,61 @@ def plot_stations(stations):
     plt.show()
 
 
+
 if __name__=='__main__':
-    events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+    #webnet_stations = model.load_stations('/data/meta/stations.pf')
+    ##hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
+    #stations = make_station_grid(webnet_stations, num_n=1, num_e=1, edge_stretch=0.15)
+    #plot_stations(stations)
+    #colormap = UniqueColor(tracers=stations)
+    #phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
+    #earthmodel = cake.load_model('../earthmodel_malek_alexandrakis.nd')
+
+    ## sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
+    #fig, ax = Animator.get_3d_ax()
+
+    #results = process(events, stations, earthmodel, phases)
+
+    #filtered = filter_pairs(results, 5, 200., ax=ax)
+    #hitcount = stats_by_station(filtered)
+    #X, Y, Z = xyz_from_hitcount(hitcount)
+    #num.savetxt('hitcount.txt', num.column_stack((X, Y, Z)))
+    #hitcount_map(hitcount, webnet_stations)
+    #make_animation(filtered, colormap)
+
+    # here goes the later calculated full extension of the seismogenic zone
+    #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
+
+    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
     webnet_stations = model.load_stations('/data/meta/stations.pf')
     #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
-    stations = make_station_grid(webnet_stations, num_n=1, num_e=1, edge_stretch=0.15)
+    #print 'exiting.....'
+    #sys.exit(0)
+    stations = make_station_grid(webnet_stations, num_n=10, num_e=10, edge_stretch=0.2)
+
     plot_stations(stations)
     colormap = UniqueColor(tracers=stations)
     phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
-    earthmodel = cake.load_model('../earthmodel_malek_alexandrakis.nd')
+    earthmodel = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
 
     # sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
-    fig, ax = Animator.get_3d_ax()
-
-    results = process(events, stations, earthmodel, phases)
-
-    filtered = filter_pairs(results, 5, 200., ax=ax)
+    center = array_center(events)
+    #fig, ax = get_3d_ax()
+    all_results = []
+    results = []
+    pool = multiprocessing.Pool()
+    nevents = 80
+    coupler = Coupler()
+    from q import s2t, e2s
+    from pyrocko.gf import SourceWithMagnitude
+    targets = [s2t(s) for s in stations]
+    sources = [SourceWithMagnitude(lat=e.lat, lon=e.lon, depth=e.depth) for e in events]
+    coupler.process(num.random.choice(sources, nevents), targets, earthmodel, phases=None, ignore_segments=True)
+    filtered = coupler.filter_pairs(3., 400., data=coupler.filtrate)
     hitcount = stats_by_station(filtered)
-    X, Y, Z = xyz_from_hitcount(hitcount)
-    num.savetxt('hitcount.txt', num.column_stack((X, Y, Z)))
+    #hitcount_pie(hitcount, colormap)
     hitcount_map(hitcount, webnet_stations)
-    make_animation(filtered, colormap)
-
+    plt.show()
