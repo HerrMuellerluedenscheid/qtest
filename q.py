@@ -22,9 +22,10 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as num
 import os
+import glob
 from micro_engine import DataTracer, Tracer, Builder#, Brunes
-from micro_engine import add_noise, RandomNoise, Chopper, DDContainer
-from micro_engine import associate_responses
+from micro_engine import Noise, RandomNoise, RandomNoiseConstantLevel, Chopper, DDContainer
+from micro_engine import associate_responses, TTPerturbation, UniformTTPerturbation
 from autogain.autogain import PhasePie, PickPie
 from brune import Brune
 import logging
@@ -92,7 +93,7 @@ def legend_clear_duplicates(ax):
 
 def ax_if_needed(ax):
     if not ax:
-        fig = plt.figure()
+        fig = plt.figure(figsize=(5,5))
         ax = fig.add_subplot(111)
     return ax
 
@@ -109,14 +110,24 @@ def plot_model(mod, ax=None, label='', color=None, parameters=['qp']):
     ax = ax_if_needed(ax)
     z = mod.profile('z')
     colors = 'rgbcy'
+    label_mapping = {'qp': 'Q$_p$',
+                     'qs': 'Q$_s$',
+                     'vp': 'v$_p$',
+                     'vs': 'v$_s$'}
     for ip, parameter in enumerate(parameters):
         profile = mod.profile(parameter)
         if ip>=1:
             ax = ax.twiny()
-        ax.plot(profile, -z, label=label, c=colors[ip])
-        ax.set_xlabel(parameter, color=colors[ip])
+        ax.plot(profile, -z/1000, label=label, c=colors[ip])
+        ax.set_xlabel(label_mapping[parameter], color=colors[ip])
+        ax.margins(0.02)
+        ax.invert_yaxis()
+        ax.set_ylabel('depth [km]')
+    #minz = min(z)
+    #maxz = max(z)
+    #zrange = maxz-minz
 
-    ax.set_ylabel('depth [m]')
+    #ax.set_ylim([minz-0.1*zrange, maxz+0.1zrange])
 
 
 def infos(ax, info_string):
@@ -392,8 +403,8 @@ class SyntheticCouple():
 
     def process(self, **pp_kwargs):
         for tracer in self.master_slave:
-            self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
-            self.repeat = pp_kwargs.pop('repeat', self.repeat)
+            #self.noise_level = pp_kwargs.pop('noise_level', self.noise_level)
+            #self.repeat = pp_kwargs.pop('repeat', self.repeat)
             tr = tracer.process(**pp_kwargs)
             if tr is None:
                 self.spectra.spectra.append((tracer, tr))
@@ -403,13 +414,13 @@ class SyntheticCouple():
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
-            for i in xrange(self.repeat):
-                #tr = tracer.process(**pp_kwargs).copy()
-                tr = tracer.process(**pp_kwargs)
-                tr_noise = add_noise(tr, level=self.noise_level)
-                f, a = self.get_spectrum(tr_noise, tracer)
-                fxfy = num.vstack((f,a))
-                self.noisy_spectra.spectra.append((tracer, fxfy))
+            #for i in xrange(self.repeat):
+            #    #tr = tracer.process(**pp_kwargs).copy()
+            #    tr = tracer.process(**pp_kwargs)
+            #    tr_noise = add_noise(tr, level=self.noise_level)
+            #    f, a = self.get_spectrum(tr_noise, tracer)
+            #    fxfy = num.vstack((f,a))
+            #    self.noisy_spectra.spectra.append((tracer, fxfy))
 
     def get_spectrum(self, tr, tracer):
         return spectralize(tr, self.method, tracer.chopper, tracer.tinc)
@@ -521,9 +532,9 @@ class SyntheticCouple():
         assert len(self.master_slave)==2
         for tr in self.master_slave:
             if not diff:
-                diff = tr.onset()-tr.source.time
+                diff = tr.onset()
             else:
-                diff -= (tr.onset()-tr.source.time)
+                diff -= (tr.onset())
         return diff
 
     def set_fit_function(self, func):
@@ -665,8 +676,6 @@ def spectral_ratio(couple):
             s -= num.exp(num.abs(slope))
         fx.append(fs)
         #fy.append(fxfy[1])
-    #import pdb
-    #pdb.set_trace()
     return i/2., s, num.sort(num.hstack(fx))
     #ind0 = limited_frequencies_ind(fmin, fmax, fx[0])
     #ind1 = limited_frequencies_ind(fmin, fmax, fx[1])
@@ -708,32 +717,35 @@ class QInverter:
         pb.finish()
 
     def plot(self, ax=None, q_threshold=None):
-        fig = plt.figure(figsize=(5,6))
-        ax = fig.add_subplot(2,1,1)
+        fig = plt.figure(figsize=(4, 4))
+        #ax = fig.add_subplot(2,1,1)
+        ax = fig.add_subplot(1,1,1)
         median = num.median(self.allqs)
         if q_threshold is not None:
             filtered = filter(lambda x: x>median-q_threshold and x<median+q_threshold, self.allqs)
         else:
             filtered = self.allqs
         ax.hist(filtered, bins=100)
+        ax.set_xlabel('Q')
+        ax.set_ylabel('counts')
         txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
+        return 
+        #ax = fig.add_subplot(2,1,2)
+        #ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
+        #c_m = mpl.cm.coolwarm
+        #norm = mpl.colors.Normalize(vmin=0, vmax=len(self.couples))
+        #s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
+        #s_m.set_array([])
+        #for i_couple, couple in enumerate(self.couples):
+        #    #c = s_m.to_rgba(i_couple)
+        #    if couple.invert_data == None:
+        #        continue
+        #    #dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
 
-        ax = fig.add_subplot(2,1,2)
-        ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
-        c_m = mpl.cm.coolwarm
-        norm = mpl.colors.Normalize(vmin=0, vmax=len(self.couples))
-        s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
-        s_m.set_array([])
-        for i_couple, couple in enumerate(self.couples):
-            #c = s_m.to_rgba(i_couple)
-            if couple.invert_data == None:
-                continue
-            #dt, fx, slope, interc, log_fy_ratio, Q = couple.invert_data
-
-            # Note: fx is the combined fx
-            dt, fx, slope, interc, Q = couple.invert_data
-            ax.plot(fx, slope*fx, alpha=0.05, color='black')
-            #ax.plot(fx, log_fy_ratio, alpha=0.1, color='black')
+        #    # Note: fx is the combined fx
+        #    dt, fx, slope, interc, Q = couple.invert_data
+        #    ax.plot(fx, slope*fx, alpha=0.05, color='black')
+        #    #ax.plot(fx, log_fy_ratio, alpha=0.1, color='black')
 
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
@@ -1567,22 +1579,37 @@ class Magnitude2Window():
         ax.set_xlabel('magnitude')
         ax.set_ylabel('time')
 
-#def window_by_magnitude(magnitude):
-#    return 0.1+5./fmin_by_magnitude(magnitude)
+
+def plot_response(response, ax=None):
+    if ax==None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+    freqs = num.exp(num.linspace(num.log(0.05), num.log(100.), 200))
+    #freqs = num.linspace(0.1, 200., 200)
+    a = response.evaluate(freqs)
+    ax.plot(freqs, a)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
 
 
-def dbtest(noise_level=0.001):
+def dbtest(noise_level=0.00005):
     print '-------------------db test-------------------------------'
-    builder = Builder()
+    use_real_shit = True
+    load_coupler = False
+    #want_station = ('CZ', 'NKC', '')
+    #want_station = ('CZ', 'KAC', '')
+    want_station = 'all'
     lat = 50.2059
     lon = 12.5152
     sources = []
     method = 'mtspec'
+    min_magnitude = 1.4
+    max_magnitude = 5.4
     fminrange = 20.
     use_common = False
-    fmax = 80.
+    fmax = 85.
     fmin = 30.
-    window_by_magnitude = Magnitude2Window.setup(0.3, 3.)
+    window_by_magnitude = Magnitude2Window.setup(0.6, 5.)
     #window_by_magnitude = Magnitude2Window.setup(0.2, 5.)
     fmin_by_magnitude = Magnitude2fmin.setup(lim=fmin)
     #store_id = 'qplayground_invtest7'
@@ -1591,8 +1618,10 @@ def dbtest(noise_level=0.001):
     #store_id = 'qplayground_30000m_simple3'
     #store_id = 'qplayground_30000m_continuous2'
     #store_id = 'qplayground_10000m_continuous2'
+    #store_id = 'qplayground_10000m_continuous2_q25'
     #store_id = 'qplayground_10000m_continuous2_q800'
-    store_id = 'qplayground_10000m_continuous2_noflatearth'
+    #store_id = 'qplayground_10000m_continuous2_noflatearth'
+    store_id = 'qplayground_total_1'
     strikemin = 160
     strikemax = 180
     dipmin = -60
@@ -1603,32 +1632,51 @@ def dbtest(noise_level=0.001):
     store = engine.get_store(store_id)
     config = engine.get_store_config(store_id)
     mod = config.earthmodel_1d
+    zmin = config.source_depth_min
+    zmax = config.source_depth_max
+    dist_min = config.distance_min
+    dist_max = config.distance_max
     plot_model(mod, parameters=['vp', 'qp'])
+    fig = plt.gcf()
+    fig.savefig('hist_db%s_model.png' %store_id, dpi=200)
     channel = 'SHZ'
-    target_kwargs = {
-        #'elevation': 0., 'codes': ('CZ', 'KVC', '', channel), 'store_id': store_id}
-        'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
-    targets = [Target(lat=lat, lon=lon, **target_kwargs)]
-    associate_responses('responses/RESP*', targets, time=util.str_to_time('2012-01-01 00:00:00.'))
+    tt_mu = 0.
+    tt_sigma = 0.01
+    #tt_sigma = 0.2
+    #perturbation = TTPerturbation(mu=tt_mu, sigma=tt_sigma)
+    perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
+    perturbation.plot()
     p_chopper = Chopper('first(p)', phase_position=0.4,
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
     stf_type = 'brunes'
     tracers = []
-    #source_depths = num.arange(10100, 13800, 300)
-    source_depths = num.arange(8200, 11800, 300)
-    #distances = num.arange(28000., 32000., 300)
-    distances = num.arange(8000., 12000., 300)
-    fn_coupler = 'synthetic_pairing.yaml'
     want_phase = 'p'
-    load_coupler = False
-
+    fn_coupler = 'synthetic_pairing.yaml'
+    fn_noise = '/media/usb/webnet/mseed/noise.mseed'
+    fn_records = '/media/usb/webnet/mseed'
+    #noise = RandomNoiseConstantLevel(noise_level)
+    noise = Noise(files=fn_noise, scale=noise_level)
     if stf_type=='brunes':
         # mu nachschauen!
         # beta aus Modell
         brunes = Brune(sigma=2.9E6, mu=3E10, beta=3400.)
     else:
         brunes = False
+
+    if noise:
+        noise_pile = pile.make_pile(fn_records)
+    else:
+        noise_pile = None
+
+    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    #lat = float(num.mean([e.lat for e in events]))
+    #lon = float(num.mean([e.lon for e in events]))
+    stations = model.load_stations('/data/meta/stations.cz.pf')
+    if not want_station=='all':
+        print 'Warning: only using station: %s' %'.'.join(want_station)
+        stations = filter(lambda x: want_station == x.nsl(), stations)
+
 
     if load_coupler:
         print 'load coupler'
@@ -1637,34 +1685,79 @@ def dbtest(noise_level=0.001):
         coupler = Coupler(filtrate)
         print 'done'
     else:
-        sources = []
-        for d in distances:
-            d = num.sqrt(d**2/2.)
-            for sd in source_depths:
-                mag = float(1.5+num.random.random()*2)
-                #mag = float(3.)
-                strike, dip, rake = moment_tensor.random_strike_dip_rake()
-                #strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
-                #                                                         dipmin, dipmax,
-                #                                                         rakemin, rakemax)
-                sources.append(DCSourceWid(
-                    lat=float(lat),
-                    lon=float(lon),
-                    depth=float(sd),
-                    magnitude=float(mag),
-                    strike=float(strike),
-                    dip=float(dip),
-                    rake=float(rake),
-                    north_shift=float(d),
-                    east_shift=float(d),
-                    stf=get_stf(type=stf_type),
-                    brunes=brunes))
         coupler = Coupler()
-        coupler.process(sources, targets, mod, [want_phase, want_phase.lower()], ignore_segments=True, dump_to=fn_coupler)
+        if use_real_shit is False:
+            target_kwargs = {
+                #'elevation': 0., 'codes': ('CZ', 'KVC', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('CZ', 'LBC', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('CZ', 'KAZ', '', channel), 'store_id': store_id}
+                'elevation': 0., 'codes': ('CZ', 'VAC', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
+            targets = [Target(lat=lat, lon=lon, **target_kwargs)]
+            source_depths = num.arange(zmin, zmax, 200)
+            distances = num.arange(1800, 2000., 200)
+            #distances = num.arange(0., 2000., 200)
+            sources = []
+            for d in distances:
+                d = num.sqrt(d**2/2.)
+                for sd in source_depths:
+                    mag = float(1.6+num.random.random()*2)
+                    #mag = float(1.)
+                    #strike, dip, rake = moment_tensor.random_strike_dip_rake()
+                    strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
+                                                                             dipmin, dipmax,
+                                                                             rakemin, rakemax)
+                    sources.append(DCSourceWid(
+                        lat=float(lat),
+                        lon=float(lon),
+                        depth=float(sd),
+                        magnitude=float(mag),
+                        strike=float(strike),
+                        dip=float(dip),
+                        rake=float(rake),
+                        north_shift=float(d),
+                        east_shift=float(d),
+                        stf=get_stf(type=stf_type),
+                        brunes=brunes))
+        elif use_real_shit is True:
+
+            targets = [s2t(s, channel, store_id=store_id) for s in stations]
+            events = filter(lambda x: x.depth>zmin and x.depth<zmax, events)
+            events = filter(lambda x: x.magnitude>=min_magnitude, events)
+            events = filter(lambda x: x.magnitude<=max_magnitude, events)
+            sources = [e2s(e) for e in events]
+            for s in sources:
+                strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
+                                                                         dipmin, dipmax,
+                                                                         rakemin, rakemax)
+                s.strike = strike
+                s.dip = dip
+                s.rake = rake
+                s.stf = get_stf(type=stf_type)
+                s.brunes = brunes
+
+        associate_responses(
+            glob.glob('responses/RESP*'),
+            targets,
+            time=util.str_to_time('2012-01-01 00:00:00.'))
+        #associate_responses(glob.glob('responses/*pz'),
+        #                    targets,
+        #                    time=util.str_to_time('2012-01-01 00:00:00.'),
+        #                    type='polezero')
+
+        #plot_response(response=targets[0].filter.response)
+        logger.info('number of sources: %s' % len(sources))
+        logger.info('number of targets: %s' % len(targets))
+        #for t in targets:
+        #    t.validate()
+        #for s in sources:
+        #    s.validate()
+        coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
+                        ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
     fig, ax = Animator.get_3d_ax()
     #Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
     Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(10, 2000, data=coupler.filtrate, max_mag_diff=0.3)
+    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate, max_mag_diff=0.5)
     animator = Animator(pairs_by_rays)
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
     paired_sources = []
@@ -1689,31 +1782,38 @@ def dbtest(noise_level=0.001):
     for r in pairs_by_rays:
         s1, s2, t  = r[0:3]
         fmin1 = fmin_by_magnitude(s1.magnitude)
-        tracer1 = Tracer(s1, t, p_chopper, channel=channel, fmin=fmin1, fmax=fmax)
-
+        tracer1 = Tracer(s1, t, p_chopper, channel=channel, fmin=fmin1,
+                         fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
+        dist1, depth1 = tracer1.get_geometry()
+        if dist1< dist_min or dist1>dist_max:
+            continue
         fmin2 = fmin_by_magnitude(s2.magnitude)
-        tracer2 = Tracer(s2, t, p_chopper, channel=channel, fmin=fmin2, fmax=fmax)
+        tracer2 = Tracer(s2, t, p_chopper, channel=channel, fmin=fmin2,
+                         fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
+        dist2, depth2 = tracer1.get_geometry()
         if fmax-fmin1<fminrange or fmax-fmin2<fminrange:
+            continue
+        if dist2< dist_min or dist2>dist_max:
             continue
         else:
             pair = [tracer1, tracer2]
             tracers.extend(pair)
             pairs.append(pair)
 
+    builder = Builder()
     tracers = builder.build(tracers, engine=engine, snuffle=False)
     colors = UniqueColor(tracers=tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
     #plt.show()
-    #noise = RandomNoise(noise_level)
     testcouples = []
     widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
     pb = progressbar.ProgressBar(maxval=len(pairs)-1, widgets=widgets).start()
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
         testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
-        testcouple.process()
+        testcouple.process(noise=noise)
         testcouples.append(testcouple)
     pb.finish()
     #outfn = 'testimage'
@@ -1722,9 +1822,9 @@ def dbtest(noise_level=0.001):
     inverter.invert()
     for testcouple in num.random.choice(testcouples, 10):
         testcouple.plot(infos=infos, colors=colors, noisy_Q=False)
-    inverter.plot(q_threshold=500)
+    inverter.plot(q_threshold=600)
     fig = plt.gcf()
-    fig.savefig('hist_databasetest.png', dpi=200)
+    fig.savefig('hist_db%s.png' %store_id, dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     analyze(inverter.couples)
     plt.show()
@@ -1735,12 +1835,14 @@ def reset_events(markers, events):
         marks = filter(lambda x: x.get_event_time()==e.time, markers)
         map(lambda x: x.set_event(e), marks)
 
-def s2t(s, channel='Z'):
+def s2t(s, channel='Z', store_id=None):
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation,
-                  codes=(s.network, s.station, s.location, channel))
+                  codes=(s.network, s.station, s.location, channel), store_id=store_id)
 
 def e2s(e):
-    s = SourceWithMagnitude.from_pyrocko_event(e)
+    #s = SourceWithMagnitude.from_pyrocko_event(e)
+    #s = DCSource.from_pyrocko_event(e)
+    s = DCSourceWid.from_pyrocko_event(e)
     s.magnitude = e.magnitude
     return s
 
@@ -1787,9 +1889,9 @@ def apply_webnet():
         phase_position=phase_position[want_phase], phaser=pie)
     tracers = []
 
-    load_coupler = True
-    fn_coupler = 'dummy_webnet_pairing_%s.yaml' % want_phase
-    #fn_coupler = 'webnet_pairing_%s.yaml' % want_phase
+    load_coupler = False
+    #fn_coupler = 'dummy_webnet_pairing_%s.yaml' % want_phase
+    fn_coupler = 'webnet_pairing_%s.yaml' % want_phase
 
     fn_mseed = '/media/usb/webnet/mseed'
     ignore = ['*.STC.*.SHZ']
@@ -1812,7 +1914,6 @@ def apply_webnet():
     print '%s sources' %len(sources)
     fig, ax = Animator.get_3d_ax()
     pairs_by_rays = coupler.filter_pairs(4., 1000, data=coupler.filtrate, ignore=ignore, max_mag_diff=0.5)
-    #pairs_by_rays = pairs_by_rays[:200]
     paired_sources = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd = p
@@ -1859,7 +1960,6 @@ def apply_webnet():
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
     #plt.show()
-    #noise = RandomNoise(noise_level)
     testcouples = []
     pb = progressbar.ProgressBar(maxval=len(pairs), widgets=pb_widgets('processing couples')).start()
     for i_p, pair in enumerate(pairs):
@@ -1932,7 +2032,7 @@ if __name__=='__main__':
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
-    dbtest(noise_level=0.000001)
+    dbtest()
     # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
     #apply_webnet()
     plt.show()
