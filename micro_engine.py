@@ -406,15 +406,12 @@ class Tracer:
             tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
             tr = self._apply_transfer(tr)
-            #tr.snuffle()
         self.processed = tr
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
         if normalize:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
-        #if response:
-        #    tr = tr.transfer(transfer_function=response)
         if noise:
             tr = noise.noisify(tr)
 
