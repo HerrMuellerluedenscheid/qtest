@@ -16,7 +16,6 @@ def brune(t, sigma, r, beta, mu, z, a):
     '''
     b = 2.33*beta / a
     u1 = sigma*beta/mu * (t-r/beta) * num.exp(-b*(t-r/beta)) # principles of seismology
-    #u2 = sigma*beta/mu* r / z *t * num.exp(-2.34 * (beta/r) * t) # krischer
     return u1
 
 def brune_omega(w, sigma, r, beta, mu, z, a):
