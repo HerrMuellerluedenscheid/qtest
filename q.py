@@ -1247,14 +1247,14 @@ def invert_test_2D(noise_level=0.001):
     strike = 170.
     dip = 70.
     rake = -30.
-    fmin = 30.
-    fmax = 130.
+    fmin = 50.
+    fmax = 180.
     source_mech = qseis.QSeisSourceMechMT(mnn=1E6, mee=1E6, mdd=1E6)
     #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
     #source_mech.m_dc *= 1E10
     #earthmodel = 'models/inv_test2_simple.nd'
-    earthmodel = 'models/inv_test2_simple.nd'
-    #earthmodel = 'models/constantall.nd'
+    #earthmodel = 'models/inv_test2_simple.nd'
+    earthmodel = 'models/constantall.nd'
     mod = cake.load_model(earthmodel)
     component = 'r'
     target_kwargs = {
@@ -1326,20 +1326,20 @@ def invert_test_2D(noise_level=0.001):
     tracers = builder.build(tracers, snuffle=False)
     colors = UniqueColor(tracers=tracers)
 
-    location_plots(tracers, colors=colors, background_model=mod)
+    #location_plots(tracers, colors=colors, background_model=mod)
 
     noise = RandomNoise(noise_level)
     testcouples = []
 
     for pair in pairs:
-        testcouple = SyntheticCouple(master_slave=pair, fmin=fmin, fmax=fmax, method=method)
-        testcouple.process(repeat=n_repeat, noise=noise)
+        testcouple = SyntheticCouple(master_slave=pair, method=method)
+        testcouple.process()
         testcouples.append(testcouple)
         infos = '''
         Strike: %s\nDip: %s\n Rake: %s\n Sampling rate [Hz]: %s\n dist_x: %s\n dist_y: %s
         noise_level: %s\nmethod: %s
         ''' % (strike, dip, rake, sampling_rate, x_targets, y_targets, noise_level, method)
-        testcouple.plot(infos=infos, colors=colors, noisy_Q=True, fmin=fmin, fmax=fmax)
+        testcouple.plot(infos=infos, colors=colors, fmin=fmin, fmax=fmax)
     outfn = 'testimage'
     plt.gcf().savefig('output/%s.png' % outfn)
 
@@ -1361,7 +1361,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     builder = Builder(cache_dir='muell-cache')
     #x_targets = num.array([1000., 10000., 20000., 30000., 40000., 50000.])
     #d1s = num.linspace(1000., 80000., 15)
-    d1s = [28000.]
+    d1s = [12000.]
     ##### ready
     #z1 = 11.*km
     #z2 = 13.*km
@@ -1379,7 +1379,7 @@ def invert_test_2D_parallel(noise_level=0.001):
 
     lat = 50.2059
     lon = 12.5152
-    sampling_rate = 400
+    sampling_rate = 250
     #sampling_rate = 100.
     time_window = 15.
     #time_window = 24
@@ -1393,12 +1393,12 @@ def invert_test_2D_parallel(noise_level=0.001):
     dip = 70.
     rake = -30.
     fmin = 50.
-    fmax = 150.
+    fmax = 100.
     source_mech = qseis.QSeisSourceMechMT(mnn=1E10, mee=1E10, mdd=1E10)
     #source_mech = qseis.QSeisSourceMechSDR(strike=strike, dip=dip, rake=rake)
     #source_mech.m_dc *= 1E10
-    #earthmodel = 'models/constantall.nd'
-    earthmodel = 'models/qplayground_30000m_simple_gradient_fh_wl.nd'
+    earthmodel = 'models/constantall.nd'
+    #earthmodel = 'models/qplayground_30000m_simple_gradient_fh_wl.nd'
     #earthmodel = 'models/inv_test2_simple.nd'
     #earthmodel = 'models/inv_test6.nd'
     mod = cake.load_model(earthmodel)
@@ -1466,7 +1466,7 @@ def invert_test_2D_parallel(noise_level=0.001):
             slow = p_chopper.arrival(sources[itarget], target).p/(cake.r2d*cake.d2m/cake.km)
             config.slowness_window = [slow*0.6, slow*0.9, slow*1.1, slow*1.4]
 #
-            tracer = Tracer(sources[itarget], target, p_chopper, config=config,
+            tracer = Tracer(sources[itarget], target, p_chopper, config=config, fmin=fmin, fmax=fmax,
                             component=component)
             tracers.append(tracer)
             pair.append(tracer)
@@ -1493,7 +1493,7 @@ def invert_test_2D_parallel(noise_level=0.001):
     #noise = RandomNoise(noise_level)
     testcouples = []
     for pair in pairs:
-        testcouple = SyntheticCouple(master_slave=pair, method=method, fmin=fmin, fmax=fmax)
+        testcouple = SyntheticCouple(master_slave=pair, method=method)
         testcouple.process()#repeat=n_repeat, noise=noise)
         testcouples.append(testcouple)
 
@@ -2030,7 +2030,7 @@ if __name__=='__main__':
 
     # DIESER:
     #invert_test_2()
-    #invert_test_2D(noise_level=0.0000001)
+    invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
     dbtest()
     # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
