@@ -8,6 +8,7 @@ from pyrocko import trace
 from pyrocko import guts
 from pyrocko import io
 from pyrocko import util
+from pyrocko import pz
 from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
@@ -19,6 +20,7 @@ import logging
 import multiprocessing
 import progressbar
 from rupture_size import radius as source_radius
+import matplotlib.pyplot as plt
 
 
 pjoin = os.path.join
@@ -27,46 +29,101 @@ logger = logging.getLogger()
 diff_response = trace.DifferentiationResponse()
 
 
-class EvalrespFilter(Filter):
-    response = trace.Evalresp.T()
-    #def __init__(self, response):
-    #    Filter.__init__(self)
+class ResponseFilter(Filter):
+    response = trace.FrequencyResponse.T()
 
 
-def associate_responses(directory, targets, time=0):
+class TTPerturbation():
+    def __init__(self, mu, sigma):
+        self.mu = mu
+        self.sigma = sigma
+
+    def perturb(self, t):
+        return t + num.random.normal(self.mu, self.sigma)
+
+    def plot(self):
+        fig = plt.figure(figsize=(4, 5))
+        ax = fig.add_subplot(111)
+        ts = [self.perturb(0) for i in xrange(1000)]
+        ax.hist(ts, bins=20)
+        ax.set_title('Travel Time Perturbation')
+
+
+class UniformTTPerturbation(TTPerturbation):
+    def __init__(self, mu, sigma):
+        '''mu: center
+        sigma: width'''
+        TTPerturbation.__init__(self, mu, sigma)
+        self.low = self.mu-0.5*self.sigma
+        self.high = self.mu+0.5*self.sigma
+
+    def perturb(self, t):
+        return t + num.random.uniform(self.low, self.high)
+
+
+
+def associate_responses(fns, targets, time=0, type='evalresp'):
     '''
     :param instant: time for which response to be evaluated
     '''
-    fns = glob.glob(directory)
     if len(fns)==0:
-        logger.warn('no files found: %s',  directory)
+        logger.warn('no files found')
     for fn in fns:
-        codes = tuple(fn.split('/')[-1].split('.')[1:])
-        logger.warn('Frage an Sebastian: Was soll das target, bzw. wie herum benutzen?')
-        response = trace.Evalresp(respfile=fn,
-                                    nslc_id=codes,
-                                    target='dis',
-                                    time=time)
+        if type=='evalresp':
+            codes = tuple(fn.split('/')[-1].split('.')[1:])
+            response = trace.Evalresp(respfile=fn,
+                                        nslc_id=codes,
+                                        #target='dis',
+                                        target='vel',
+                                        time=time)
+        if type=='polezero':
+            zeros, poles, constant = pz.read_sac_zpk(fn)
+            sc = fn.split('/')[-1].split('.')[:2]
+            codes = ('CZ', sc[0], '', sc[1])
+            #codes = tuple(('CZ', ) + tuple(sc))
+            #poles = [p/(2*num.pi) for p in poles]
+            response = trace.PoleZeroResponse(poles=poles, zeros=zeros, constant=num.complex(constant))
         for t in targets:
             if t.codes==codes:
-                t.filter = EvalrespFilter(response=response)
+                t.filter = ResponseFilter(response=response)
                 logger.info('resp-file: %s <---> target: %s' %(codes, t.codes))
                 break
         else:
             logger.info('resp-file: %s unassociated' % str(codes))
-    
+
     for t in targets:
         if not t.filter:
             logger.warn('Target %s does not carry response info' % str(t.codes))
 
 
-def add_noise(t, level):
-    ydata = t.get_ydata()
-    noise = num.random.random(len(ydata))-0.5
-    noise *= ((num.max(num.abs(ydata))) * level)
-    ydata += noise
-    t.set_ydata(ydata)
-    return t
+
+class Noise():
+    def __init__(self, files, scale=1.):
+        traces = io.load(files)
+        self.scale = scale
+        self.noise = self.dictify_noise(traces)
+
+    def dictify_noise(self, traces):
+        noise = {}
+        for tr in traces:
+            if not tr.nslc_id in noise:
+                noise[tr.nslc_id] = tr.get_ydata()
+            else:
+                logger.warn('More than one noisy traces for %s' % ('.'.join(tr.nslc_id)))
+        return noise
+
+    def noisify(self, tr):
+        if tr.nslc_id not in self.noise.keys():
+            raise Exception('No Noise for tr %s' % ('.'.join(tr.nslc_id)))
+        n = self.extract_noise(tr) * self.scale
+        tr.ydata += n
+        return tr
+
+    def extract_noise(self, tr):
+        n_want = len(tr.ydata)
+        i_start = num.random.choice(range(len(self.noise[tr.nslc_id])-n_want))
+        return self.noise[tr.nslc_id][i_start:i_start+n_want]
+
 
 
 class RandomNoise:
@@ -75,7 +132,31 @@ class RandomNoise:
 
     def noisify(self, tr):
         tr = tr.copy()
-        return add_noise(tr, self.level)
+        return self.add_noise(tr, self.level)
+
+    def add_noise(self, t, level):
+        ydata = t.get_ydata()
+        noise = num.random.random(len(ydata))-0.5
+        noise *= ((num.max(num.abs(ydata))) * level)
+        ydata += noise
+        t.set_ydata(ydata)
+        return t
+
+
+class RandomNoiseConstantLevel:
+    def __init__(self, level):
+        self.level = level
+
+    def noisify(self, tr):
+        tr = tr.copy()
+        return self.add_noise(tr, self.level)
+
+    def add_noise(self, t, level):
+        ydata = t.get_ydata()
+        noise = (num.random.random(len(ydata))-0.5) * level
+        ydata += noise
+        t.set_ydata(ydata)
+        return t
 
 class DDContainer():
     """ A Double Dict Container..."""
@@ -265,6 +346,7 @@ class Tracer:
         self.chopper = chopper
         self.kwargs = kwargs
         self.channel = channel
+        self.perturbation = kwargs.pop('perturbation', 0.)
         self.want = kwargs.pop('want', 'displacement')
         self.fmin = kwargs.pop('fmin', -99999.)
         self.fmax = kwargs.pop('fmax', 99999.)
@@ -304,10 +386,12 @@ class Tracer:
             traces = response.pyrocko_traces()
             processed = []
             for tr in traces:
+                #tr.snuffle()
                 if self.source.brunes:
                     self.source.brunes.preset(source=self.source, target=self.target)
                     tr = tr.transfer(transfer_function=self.source.brunes)
-                tr = self.simulate(tr)
+                if self.target.filter:
+                    tr = self.simulate(tr)
                 processed.append(tr)
             self.traces = processed
 
@@ -322,6 +406,7 @@ class Tracer:
             tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
             tr = self._apply_transfer(tr)
+            #tr.snuffle()
         self.processed = tr
         return self.post_process(tr, **pp_kwargs)
 
@@ -351,10 +436,10 @@ class Tracer:
         trace.snuffle(self.traces)
 
     def onset(self):
-        return self.chopper.onset(self.source, self.target)
+        return self.chopper.onset(self.source, self.target) + self.perturbation
 
     def arrival(self):
-        return self.chopper.arrival(self.source, self.target)
+        return self.chopper.arrival(self.source, self.target) + self.perturbation
 
     def get_geometry(self):
         return self.source.distance_to(self.target), self.source.depth
@@ -396,7 +481,7 @@ class Chopper():
         self.chopped = DDContainer()
         self.xfade = xfade
 
-    def chop(self, s, t, tr, debug=False):
+    def chop(self, s, t, tr, offset=0., debug=False):
         dist = s.distance_to(t)
         depth = s.depth
         tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
@@ -410,9 +495,11 @@ class Chopper():
             raise Exception('Need to define exactly one of endphasestr and fixed length')
         tr_bkp = tr
         tr = tr.copy()
-        tr.set_location('cp')
+        tstart += (offset + s.time)
+        tend += (offset + s.time)
         tstart, tend = self.setup_time_window(tstart, tend)
         tr.chop(tstart, tend)
+        #tr.extend(tr.tmin-1, tr.tmax+1, 'repeat')
         self.chopped.add(s, t, tr)
         return tr
 
@@ -420,6 +507,7 @@ class Chopper():
         tstart = self.phase_pie.t(self.startphasestr, (source, target))
         if not tstart:
             return tstart
+        tstart += source.time
         if self.by_magnitude!=None:
             tend = tstart+self.by_magnitude(source.magnitude)
         else:
