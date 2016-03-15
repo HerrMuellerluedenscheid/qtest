@@ -387,9 +387,13 @@ class Tracer:
             processed = []
             for tr in traces:
                 #tr.snuffle()
+                #tr_c = tr.copy()
                 if self.source.brunes:
                     self.source.brunes.preset(source=self.source, target=self.target)
                     tr = tr.transfer(transfer_function=self.source.brunes)
+                    #trace.snuffle([tr_c, tr])
+
+                tr = self._apply_transfer(tr)
                 if self.target.filter:
                     tr = self.simulate(tr)
                 processed.append(tr)
@@ -405,7 +409,6 @@ class Tracer:
         if not tr:
             tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
-            tr = self._apply_transfer(tr)
         self.processed = tr
         return self.post_process(tr, **pp_kwargs)
 
