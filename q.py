@@ -1,7 +1,7 @@
 import matplotlib as mpl
 mpl.use('Qt4Agg')
-mpl.rc('ytick', labelsize=8)
-mpl.rc('xtick', labelsize=8)
+mpl.rc('ytick', labelsize=10)
+mpl.rc('xtick', labelsize=10)
 
 import copy
 import progressbar
@@ -102,8 +102,8 @@ def plot_traces(tr, t_shift=0, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     if tr:
         ax.plot(tr.get_xdata()+t_shift, tr.get_ydata(), label=label, color=color)
-    ax.set_xlabel('time [s]')
-    ax.set_ylabel('displ [m]')
+    #ax.set_xlabel('time [s]')
+    #ax.set_ylabel('displ [m]')
 
 
 def plot_model(mod, ax=None, label='', color=None, parameters=['qp']):
@@ -342,7 +342,7 @@ class Spectra(DDContainer):
             count += 1
 
         ax.autoscale()
-        ax.set_title("$\sqrt{PSD}$")
+        #ax.set_title("$\sqrt{PSD}$")
         ax.set_ylabel("A")
         ax.set_xlabel("f[Hz]")
         ax.set_yscale("log")
@@ -426,105 +426,93 @@ class SyntheticCouple():
         return spectralize(tr, self.method, tracer.chopper, tracer.tinc)
 
     def plot(self, colors, **kwargs):
-        fig = plt.figure(figsize=(3, 6))
-        ax = fig.add_subplot(4, 1, 2)
+        fn = kwargs.pop('savefig', False)
+        fig = plt.figure(figsize=(4, 6.5))
+        ax = fig.add_subplot(4, 1, 3)
         self.spectra.plot_all(ax, colors=colors, legend=False)
         if self.invert_data:
             Q = self.invert_data[-1]
             ax.text(0.01, 0.01, "Q=%1.1f" % Q, verticalalignment='bottom', horizontalalignment='left',
                     transform=ax.transAxes)
-        '''
-        # Q model right panel:
-        ax = fig.add_subplot(3, 2, 2)
-        for tracer in self.master_slave:
-            plot_model(mod=tracer.config.earthmodel_1d,
-                       label=tracer.config.id,
-                       color=colors[tracer],
-                       ax=ax,
-                       parameters=kwargs.get('parameters', ['qp']))
-        #ax.set_xlim((ax.get_xlim()[0]*0.9,
-        #             ax.get_xlim()[1]*1.1))
-        for tr in self.master_slave:
-            ax.axhline(-tr.source.depth, ls='--', label='z %s' % tr.config.id,
-                       color=colors[tr])
-        '''
-        ax = fig.add_subplot(4, 1, 1)
         yshift=0
-        for tracer in self.master_slave:
+        info_str = ''
+        for i, tracer in enumerate(self.master_slave):
+            ax = fig.add_subplot(4, 1, 1+i)
             tr = tracer.processed
             otime = tracer.source.time
             plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color=colors[tracer])
-            info_str = "otime: %s, mag: %1.1f, codes: %s, phase: %s" % (util.time_to_str(otime),
+            info_str += "\notime: %s,\n M: %1.1f, s: %s" % (util.time_to_str(otime),
                                                                      tracer.source.magnitude,
-                                                                     ".".join(tracer.target.codes),
-                                                                        tracer.chopper.startphasestr)
+                                                                     ".".join(tracer.target.codes))
 
-            ax.text(0.01, 0.01+yshift, info_str, verticalalignment='bottom', horizontalalignment='left',
-                    transform=ax.transAxes)
-            yshift = 0.07
-
-        #if self.noise_level!=0.:
-        #    trs = tracer.process(normalize=kwargs.get('normalize', False)).copy()
-        #    trs = add_noise(trs, level=self.noise_level)
-        #    plot_traces(tr=trs, ax=ax, label=tracer.config.id, color=colors[tracer])
-
+        ax = fig.add_subplot(4, 1, 4)
+        ax.text(0.01, 0.01, info_str, verticalalignment='bottom', horizontalalignment='left',
+                transform=ax.transAxes)
+        ax.axis('off')
+        fig.subplots_adjust(hspace=0.21, wspace=0.21)
+        if fn:
+            #fig.tight_layout()
+            fig.savefig(fn, dpi=200)
         Qs = []
-        ax = fig.add_subplot(4, 1, 3)
-        if kwargs.get('noisy_Q', False):
-            fxs, fy_ratios = noisy_spectral_ratios(self)
-
-            xs = []
-            ys = []
-            ys_ratio = []
-            for i in xrange(len(fxs)):
-                slope, interc, r_value, p_value, stderr = linregress(fxs[i], num.log(fy_ratios[i]))
-                dt = self.delta_onset()
-                Q = -1.*num.pi*dt/slope
-                if num.abs(Q)>10000:
-                    logger.warn('Q pretty large... skipping %s' % Q)
-                    continue
-
-                Qs.append(Q)
-                xs.append(fxs[i])
-                ys.append(interc+fxs[i]*slope)
-                ys_ratio.append(num.log(fy_ratios[i]))
-            if len(Qs)<2:
-                ax.text(0.5, 0.5, 'Too few Qs', transform=ax.transAxes)
-                return
-
-            std_q = num.std(Qs)
-            maxQ = max(Qs)
-            minQ = min(Qs)
-
-            c_m = mpl.cm.coolwarm
-            norm = mpl.colors.Normalize(vmin=minQ, vmax=maxQ)
-            s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
-            s_m.set_array([])
-            for i in xrange(len(xs)):
-                c = s_m.to_rgba(Qs[i])
-                ax.plot(xs[i], ys_ratio[i], color=c, alpha=0.2)
-                ax.plot(xs[i], ys[i], color=c, alpha=0.2)
-            ax.set_xlabel('f[Hz]')
-            ax.set_ylabel('log(A1/A2)')
-            cb = plt.colorbar(s_m)
-            cb.set_label('Q')
-            ax = fig.add_subplot(4, 1, 4)
-            v_range = 200
-            #ax.hist(num.array(Qs)[num.where(num.abs(Qs)<=v_range)], bins=25)
-            try:
-                ax.hist(num.array(Qs), bins=25)
-            except AttributeError as e:
-                logger.warn(e)
-            #ax.set_xlim([-120., 120.])
-            med = num.median(Qs)
-            ax.text(0.01, 0.99, 'median: %1.1f\n $\sigma$: %1.1f' %(med, std_q),
-                    verticalalignment='top', horizontalalignment='left',
-                    transform=ax.transAxes)
-            ax.set_ylabel('Count')
-            ax.set_xlabel('Q')
-        #ax = fig.add_subplot(3, 2, 6)
-        #infos(ax, kwargs.pop('infos'))
         return Qs
+
+
+        #ax = fig.add_subplot(4, 1, 3)
+        #if kwargs.get('noisy_Q', False):
+        #    fxs, fy_ratios = noisy_spectral_ratios(self)
+
+        #    xs = []
+        #    ys = []
+        #    ys_ratio = []
+        #    for i in xrange(len(fxs)):
+        #        slope, interc, r_value, p_value, stderr = linregress(fxs[i], num.log(fy_ratios[i]))
+        #        dt = self.delta_onset()
+        #        Q = -1.*num.pi*dt/slope
+        #        if num.abs(Q)>10000:
+        #            logger.warn('Q pretty large... skipping %s' % Q)
+        #            continue
+
+        #        Qs.append(Q)
+        #        xs.append(fxs[i])
+        #        ys.append(interc+fxs[i]*slope)
+        #        ys_ratio.append(num.log(fy_ratios[i]))
+        #    if len(Qs)<2:
+        #        ax.text(0.5, 0.5, 'Too few Qs', transform=ax.transAxes)
+        #        return
+
+        #    std_q = num.std(Qs)
+        #    maxQ = max(Qs)
+        #    minQ = min(Qs)
+
+        #    c_m = mpl.cm.coolwarm
+        #    norm = mpl.colors.Normalize(vmin=minQ, vmax=maxQ)
+        #    s_m = mpl.cm.ScalarMappable(cmap=c_m, norm=norm)
+        #    s_m.set_array([])
+        #    for i in xrange(len(xs)):
+        #        c = s_m.to_rgba(Qs[i])
+        #        ax.plot(xs[i], ys_ratio[i], color=c, alpha=0.2)
+        #        ax.plot(xs[i], ys[i], color=c, alpha=0.2)
+        #    ax.set_xlabel('f[Hz]')
+        #    ax.set_ylabel('log(A1/A2)')
+        #    cb = plt.colorbar(s_m)
+        #    cb.set_label('Q')
+        #    ax = fig.add_subplot(4, 1, 4)
+        #    v_range = 200
+        #    #ax.hist(num.array(Qs)[num.where(num.abs(Qs)<=v_range)], bins=25)
+        #    try:
+        #        ax.hist(num.array(Qs), bins=25)
+        #    except AttributeError as e:
+        #        logger.warn(e)
+        #    #ax.set_xlim([-120., 120.])
+        #    med = num.median(Qs)
+        #    ax.text(0.01, 0.99, 'median: %1.1f\n $\sigma$: %1.1f' %(med, std_q),
+        #            verticalalignment='top', horizontalalignment='left',
+        #            transform=ax.transAxes)
+        #    ax.set_ylabel('Count')
+        #    ax.set_xlabel('Q')
+        ##ax = fig.add_subplot(3, 2, 6)
+        ##infos(ax, kwargs.pop('infos'))
+        #return Qs
 
     def delta_onset(self):
         ''' Get the onset difference between two (!) used phases'''
@@ -705,7 +693,8 @@ class QInverter:
             #slope, interc, r_value, p_value, stderr = linregress(fx, num.log(fy_ratio))
             #slope = spectral_ratio(couple)
             dt = couple.delta_onset()
-            Q = num.abs(num.pi*dt/slope)
+            #Q = num.abs(num.pi*dt/slope)
+            Q = num.pi*dt/slope
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
@@ -716,7 +705,7 @@ class QInverter:
             #self.stderrs.append(stderr)
         pb.finish()
 
-    def plot(self, ax=None, q_threshold=None):
+    def plot(self, ax=None, q_threshold=None, want_q=False):
         fig = plt.figure(figsize=(4, 4))
         #ax = fig.add_subplot(2,1,1)
         ax = fig.add_subplot(1,1,1)
@@ -729,6 +718,12 @@ class QInverter:
         ax.set_xlabel('Q')
         ax.set_ylabel('counts')
         txt ='median: %1.1f\n$\sigma$: %1.1f' % (median, num.std(self.allqs))
+        ax.text(0.01, 0.99, txt, transform=ax.transAxes, verticalalignment='top')
+        ax.axvline(0, color='black', alpha=0.3)
+        ax.axvline(median, color='blue')
+        ax.set_xlim([-q_threshold, q_threshold])
+        if want_q:
+            ax.axvline(want_q, color='r')
         return 
         #ax = fig.add_subplot(2,1,2)
         #ax.text(0.01, 0.99, txt, transform=ax.transAxes, horizontalalignment='left', verticalalignment='top')
@@ -1592,6 +1587,11 @@ def plot_response(response, ax=None):
     ax.set_yscale('log')
 
 
+def wanted_q(mod, z):
+    q = mod.layer(z).material(z).qp
+    return q
+
+
 def dbtest(noise_level=0.00005):
     print '-------------------db test-------------------------------'
     use_real_shit = True
@@ -1603,13 +1603,13 @@ def dbtest(noise_level=0.00005):
     lon = 12.5152
     sources = []
     method = 'mtspec'
-    min_magnitude = 1.4
+    min_magnitude = 1.5
     max_magnitude = 5.4
     fminrange = 20.
     use_common = False
     fmax = 85.
-    fmin = 30.
-    window_by_magnitude = Magnitude2Window.setup(0.6, 5.)
+    fmin = 20.
+    window_by_magnitude = Magnitude2Window.setup(0.1, 4.)
     #window_by_magnitude = Magnitude2Window.setup(0.2, 5.)
     fmin_by_magnitude = Magnitude2fmin.setup(lim=fmin)
     #store_id = 'qplayground_invtest7'
@@ -1621,6 +1621,7 @@ def dbtest(noise_level=0.00005):
     #store_id = 'qplayground_10000m_continuous2_q25'
     #store_id = 'qplayground_10000m_continuous2_q800'
     #store_id = 'qplayground_10000m_continuous2_noflatearth'
+    #store_id = 'qplayground_total_2'
     store_id = 'qplayground_total_1'
     strikemin = 160
     strikemax = 180
@@ -1641,8 +1642,8 @@ def dbtest(noise_level=0.00005):
     fig.savefig('hist_db%s_model.png' %store_id, dpi=200)
     channel = 'SHZ'
     tt_mu = 0.
-    tt_sigma = 0.01
-    #tt_sigma = 0.2
+    tt_sigma = 0.02
+    save_figs = True
     #perturbation = TTPerturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation.plot()
@@ -1650,6 +1651,7 @@ def dbtest(noise_level=0.00005):
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
     stf_type = 'brunes'
+    #stf_type = 'halfsin'
     tracers = []
     want_phase = 'p'
     fn_coupler = 'synthetic_pairing.yaml'
@@ -1662,7 +1664,7 @@ def dbtest(noise_level=0.00005):
         # beta aus Modell
         brunes = Brune(sigma=2.9E6, mu=3E10, beta=3400.)
     else:
-        brunes = False
+        brunes = None
 
     if noise:
         noise_pile = pile.make_pile(fn_records)
@@ -1670,6 +1672,9 @@ def dbtest(noise_level=0.00005):
         noise_pile = None
 
     events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    average_depth = num.mean([e.depth for e in events])
+    want_q = wanted_q(mod, average_depth)
+
     #lat = float(num.mean([e.lat for e in events]))
     #lon = float(num.mean([e.lon for e in events]))
     stations = model.load_stations('/data/meta/stations.cz.pf')
@@ -1695,7 +1700,7 @@ def dbtest(noise_level=0.00005):
                 #'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
             targets = [Target(lat=lat, lon=lon, **target_kwargs)]
             source_depths = num.arange(zmin, zmax, 200)
-            distances = num.arange(1800, 2000., 200)
+            distances = num.arange(1800, 10000., 200)
             #distances = num.arange(0., 2000., 200)
             sources = []
             for d in distances:
@@ -1820,9 +1825,10 @@ def dbtest(noise_level=0.00005):
     #plt.gcf().savefig('output/%s.png' % outfn)
     inverter = QInverter(couples=testcouples)
     inverter.invert()
-    for testcouple in num.random.choice(testcouples, 10):
-        testcouple.plot(infos=infos, colors=colors, noisy_Q=False)
-    inverter.plot(q_threshold=600)
+    for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
+        fn = 'example_%s_%s.png' % (store_id, str(i).zfill(2))
+        testcouple.plot(infos=infos, colors=colors, noisy_Q=False, savefig=fn)
+    inverter.plot(q_threshold=600, want_q=want_q)
     fig = plt.gcf()
     fig.savefig('hist_db%s.png' %store_id, dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
@@ -1857,6 +1863,10 @@ def paired_sources_dict(paired_sources):
 
 def apply_webnet():
     print '-------------------apply  -------------------------------'
+
+
+    # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
+    # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
     builder = Builder()
     method = 'mtspec'
     fmax = 89
@@ -2030,7 +2040,7 @@ if __name__=='__main__':
 
     # DIESER:
     #invert_test_2()
-    invert_test_2D(noise_level=0.0000001)
+    #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
     dbtest()
     # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
