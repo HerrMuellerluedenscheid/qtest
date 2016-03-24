@@ -73,12 +73,10 @@ class Brune(Object):
         return U
 
 
-
-if __name__=='__main__':
+def presentation_plot():
     import matplotlib.pyplot as plt
     from matplotlib import cm
-
-    duration = 200
+    duration = 20
     sampling_rate = 100
     sigma = 2.9E6
     r = 8000.
@@ -86,18 +84,63 @@ if __name__=='__main__':
     mu = 2e10
     z = 8000
     #a = 300.
+    t = num.linspace(0.002, duration, duration*sampling_rate)
+    f = 1./t
+    #omega = 2*num.pi * f
+    cmap = cm.copper
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=50, vmax=450))
+    sm._A = []
+    #aa = num.linspace(50, 500, 100)
+    aa = [300, 500]
+    fcs = [16, 20]
+    for ii, a in enumerate(aa):
+        fig = plt.figure(figsize=(3, 2.3))
+        ax = fig.add_subplot(111)
+        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, z=z, a=a)
+        ax.plot(f, U, color=cmap((a-50)/450), label=a)
+        ax.set_title('A$_%s$' % (ii))
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.axvline(fcs[ii])
+        fig.savefig('synthetic_tests/brune_example_%s.svg' %ii, dpi=200)
+        ax.set_ylabel('A')
+        ax.set_xlabel('f')
+        #Ufft = num.fft.rfft(U)
+        #omegafft = num.fft.rfftfreq(n=len(U), d=1/sampling_rate)
+    #ax = fig.add_subplot(311)
+    #ax.plot(t, u2, 'o')
+    #ax = fig.add_subplot(313)
+    #ax.plot(t, num.abs(u1), 'bo')
+    #ax.plot(omegafft, Ufft)
+    #ax.plot(Ufft)
+    plt.show()
+
+if __name__=='__main__':
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+    #presentation_plot()
+    #import sys
+    #sys.exit(0)
+    duration = 20
+    sampling_rate = 1000
+    sigma = 2.9E6
+    r = 10000.
+    beta = 3000.
+    mu = 2e10
+    z = 8000
+    #a = 300.
     t = num.linspace(0.001, duration, duration*sampling_rate)
     f = 1./t
-    omega = 2*num.pi * f
+    #omega = 2*num.pi * f
     fig = plt.figure()
-    ax = fig.add_subplot(312)
+    ax = fig.add_subplot(111)
     cmap = cm.copper
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=50, vmax=450))
     sm._A = []
     aa = num.linspace(50, 500, 100)
     for a in aa:
-        U = brune_omega(w=omega, sigma=sigma, r=r, beta=beta, mu=mu, z=z, a=a)
-        ax.plot(omega, U, color=cmap((a-50)/450), label=a)
+        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, z=z, a=a)
+        ax.plot(f, U, color=cmap((a-50)/450), label=a)
         #Ufft = num.fft.rfft(U)
         #omegafft = num.fft.rfftfreq(n=len(U), d=1/sampling_rate)
     plt.colorbar(sm)
@@ -105,6 +148,9 @@ if __name__=='__main__':
     #ax.plot(t, u2, 'o')
     ax.set_xscale('log')
     ax.set_yscale('log')
+    ax.set_xlabel('f[Hz]')
+    ax.set_ylabel('A')
+    fig.savefig('brune_sources.png', dpi=200)
     #ax = fig.add_subplot(313)
     #ax.plot(t, num.abs(u1), 'bo')
     #ax.plot(omegafft, Ufft)
