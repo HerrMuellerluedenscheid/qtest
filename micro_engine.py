@@ -463,7 +463,7 @@ class DataTracer(Tracer):
             tr = self.chopper.chop_pile(self.data_pile, self.source, self.target)
         self.traces = [tr]
         self.processed = tr
-        return self.post_process(tr, **pp_kwargs)
+        return tr
 
     def label(self):
         return '%s/%s' % (util.time_to_str(self.source.time), ".".join(self.target.codes))
