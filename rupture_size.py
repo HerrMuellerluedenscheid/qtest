@@ -16,12 +16,8 @@ if __name__=='__main__':
     mls = random.random(1000)*4.
     a = radius(mls)
     pylab.plot(mls, a, '+')
+    pylab.ylabel('Radius [m]')
+    pylab.xlabel('Magnitude')
     pylab.title('Ml vs. source radius')
-
-    pylab.figure()
-    beta = 2300.
-    pylab.plot(mls, wc(beta, a), '+')
-    pylab.title('Ml vs. wc')
-
-
+    pylab.savefig('source_dimensions.png', dpi=200)
     pylab.show()
