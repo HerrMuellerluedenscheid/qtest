@@ -316,6 +316,24 @@ def stats_by_station(results):
     return hit_counter
 
 
+def get_depths(results):
+    depths = []
+    for r in results:
+        s1, s2, t, p, td= r
+        depths.append(s1.depth)
+        depths.append(s2.depth)
+    return depths
+
+
+def get_distances(results):
+    distances = []
+    for r in results:
+        s1, s2, t, p, td= r
+        distances.append(s1.distance_to(t))
+        distances.append(s2.distance_to(t))
+
+    return distances
+
 def hitcount_pie(hitcounter, colormap):
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -362,7 +380,7 @@ def hitcount_map_from_file(filename, stations=None, save_to='hitcount_map.png'):
             ax.text(x, y, label,
                     bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
     ax.set_xlabel('longitude [$^\circ$]')
-    ax.set_ylabel(save_to)
+    ax.set_ylabel('latitude  [$^\circ$]')
     fig.savefig('hitcount_map.png', dpi=200)
     plt.show()
 
@@ -372,14 +390,21 @@ def hitcount_map(hit_counter, stations, save_to='hitcount_map.png'):
     fig = plt.figure()
     ax = fig.add_subplot(111)
     X, Y, Z = xyz_from_hitcount(hit_counter)
-    ax.scatter(X, Y, s=Z/num.max(Z)*60)
+    ax.scatter(X, Y, s=Z/num.max(Z)*50)
+
+    #check eins zwo
+    #ax.set_xlim((min(X), max(X)))
+    #ax.set_ylim((min(Y), max(Y)))
 
     for x, y, label in xyz_from_stations(stations):
         ax.plot(x, y, 'g^')
         ax.text(x, y, label,
                 bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
+
+    ax.set_ymargin(0.01)
+    ax.set_xmargin(0.01)
     ax.set_xlabel('longitude [$^\circ$]')
-    ax.set_ylabel(save_to)
+    ax.set_ylabel('latitude [$^\circ$]')
     fig.savefig('hitcount_map.png')
     plt.show()
 
@@ -451,8 +476,8 @@ if __name__=='__main__':
     #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
     #print 'exiting.....'
     #sys.exit(0)
-    stations = make_station_grid(webnet_stations, num_n=10, num_e=10, edge_stretch=0.2)
-
+    #stations = make_station_grid(webnet_stations, num_n=5, num_e=4, edge_stretch=0.2)
+    stations = webnet_stations
     plot_stations(stations)
     colormap = UniqueColor(tracers=stations)
     phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
@@ -464,15 +489,25 @@ if __name__=='__main__':
     all_results = []
     results = []
     pool = multiprocessing.Pool()
-    nevents = 80
+    nevents = 120
     coupler = Coupler()
     from q import s2t, e2s
     from pyrocko.gf import SourceWithMagnitude
     targets = [s2t(s) for s in stations]
     sources = [SourceWithMagnitude(lat=e.lat, lon=e.lon, depth=e.depth) for e in events]
     coupler.process(num.random.choice(sources, nevents), targets, earthmodel, phases=None, ignore_segments=True)
-    filtered = coupler.filter_pairs(3., 400., data=coupler.filtrate)
+    filtered = coupler.filter_pairs(4., 1000., data=coupler.filtrate)
     hitcount = stats_by_station(filtered)
+    distances = get_distances(filtered)
+    depths = get_depths(filtered)
+    fig = plt.figure()
+    ax = fig.add_subplot(211)
+    ax.hist(distances, bins=30)
+    ax.set_title('epicentral distances')
+    ax = fig.add_subplot(212)
+    ax.hist(depths, bins=30)
+    ax.set_title('source depths')
+    fig.savefig('epi_dists_depths_pairs.png')
     #hitcount_pie(hitcount, colormap)
     hitcount_map(hitcount, webnet_stations)
     plt.show()
