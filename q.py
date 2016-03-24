@@ -1,7 +1,7 @@
 import matplotlib as mpl
 mpl.use('Qt4Agg')
-mpl.rc('ytick', labelsize=10)
-mpl.rc('xtick', labelsize=10)
+mpl.rc('ytick', labelsize=20)
+mpl.rc('xtick', labelsize=20)
 
 import copy
 import progressbar
@@ -705,7 +705,7 @@ class QInverter:
             #self.stderrs.append(stderr)
         pb.finish()
 
-    def plot(self, ax=None, q_threshold=None, want_q=False):
+    def plot(self, ax=None, q_threshold=None, relative_to=None, want_q=False):
         fig = plt.figure(figsize=(4, 4))
         #ax = fig.add_subplot(2,1,1)
         ax = fig.add_subplot(1,1,1)
@@ -721,7 +721,11 @@ class QInverter:
         ax.text(0.01, 0.99, txt, transform=ax.transAxes, verticalalignment='top')
         ax.axvline(0, color='black', alpha=0.3)
         ax.axvline(median, color='blue')
-        ax.set_xlim([-q_threshold, q_threshold])
+        if relative_to=='median':
+            ax.set_xlim([median-q_threshold, median+q_threshold])
+        else:
+            ax.set_xlim([q_threshold, q_threshold])
+
         if want_q:
             ax.axvline(want_q, color='r')
         return 
@@ -1607,10 +1611,11 @@ def dbtest(noise_level=0.00005):
     max_magnitude = 5.4
     fminrange = 20.
     use_common = False
-    fmax = 85.
+    fmax = 75.
+    #fmin = 30.
     fmin = 20.
-    window_by_magnitude = Magnitude2Window.setup(0.1, 4.)
-    #window_by_magnitude = Magnitude2Window.setup(0.2, 5.)
+    #window_by_magnitude = Magnitude2Window.setup(0.1, 4.)
+    window_by_magnitude = Magnitude2Window.setup(0.2, 4.)
     fmin_by_magnitude = Magnitude2fmin.setup(lim=fmin)
     #store_id = 'qplayground_invtest7'
     #store_id = 'qplayground_30000m_2'
@@ -1621,8 +1626,9 @@ def dbtest(noise_level=0.00005):
     #store_id = 'qplayground_10000m_continuous2_q25'
     #store_id = 'qplayground_10000m_continuous2_q800'
     #store_id = 'qplayground_10000m_continuous2_noflatearth'
-    #store_id = 'qplayground_total_2'
-    store_id = 'qplayground_total_1'
+    store_id = 'qplayground_total_2'
+    #store_id = 'qplayground_total_2_q400'
+    #store_id = 'qplayground_total_1_q400'
     strikemin = 160
     strikemax = 180
     dipmin = -60
@@ -1642,7 +1648,7 @@ def dbtest(noise_level=0.00005):
     fig.savefig('hist_db%s_model.png' %store_id, dpi=200)
     channel = 'SHZ'
     tt_mu = 0.
-    tt_sigma = 0.02
+    tt_sigma = 0.2
     save_figs = True
     #perturbation = TTPerturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
@@ -1699,8 +1705,9 @@ def dbtest(noise_level=0.00005):
                 'elevation': 0., 'codes': ('CZ', 'VAC', '', channel), 'store_id': store_id}
                 #'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
             targets = [Target(lat=lat, lon=lon, **target_kwargs)]
-            source_depths = num.arange(zmin, zmax, 200)
-            distances = num.arange(1800, 10000., 200)
+            noise_pile = None
+            source_depths = num.arange(zmin, zmax, 400)
+            distances = num.arange(8000, 12000., 400)
             #distances = num.arange(0., 2000., 200)
             sources = []
             for d in distances:
@@ -1724,6 +1731,7 @@ def dbtest(noise_level=0.00005):
                         east_shift=float(d),
                         stf=get_stf(type=stf_type),
                         brunes=brunes))
+
         elif use_real_shit is True:
 
             targets = [s2t(s, channel, store_id=store_id) for s in stations]
@@ -1762,7 +1770,7 @@ def dbtest(noise_level=0.00005):
     fig, ax = Animator.get_3d_ax()
     #Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
     Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate, max_mag_diff=0.5)
+    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate, max_mag_diff=2.5)
     animator = Animator(pairs_by_rays)
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
     paired_sources = []
@@ -1826,11 +1834,11 @@ def dbtest(noise_level=0.00005):
     inverter = QInverter(couples=testcouples)
     inverter.invert()
     for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
-        fn = 'example_%s_%s.png' % (store_id, str(i).zfill(2))
+        fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
         testcouple.plot(infos=infos, colors=colors, noisy_Q=False, savefig=fn)
-    inverter.plot(q_threshold=600, want_q=want_q)
+    inverter.plot(q_threshold=600, relative_to='median', want_q=want_q)
     fig = plt.gcf()
-    fig.savefig('hist_db%s.png' %store_id, dpi=200)
+    fig.savefig('synthetic_tests/%s/hist_db%s.png' %(want_phase, store_id), dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     analyze(inverter.couples)
     plt.show()
@@ -1873,7 +1881,8 @@ def apply_webnet():
     fminrange = 20
     use_common = True
     fmin_by_magnitude = Magnitude2fmin.setup(lim=25)
-    min_magnitude = 1.5
+    #min_magnitude = 1.5
+    min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
@@ -1887,7 +1896,8 @@ def apply_webnet():
     want_phase = 'P'
     #window_length = {'S': 0.4, 'P': 0.4}
     window_by_magnitude = Magnitude2Window.setup(0.05, 2.5)
-    phase_position = {'S': 0.2, 'P': 0.25}
+    #window_by_magnitude = Magnitude2Window.setup(0.1, 4.)
+    phase_position = {'S': 0.2, 'P': 0.3}
     #window_length = {'S': 0.4, 'P': 0.4}
     #phase_position = {'S': 0.2, 'P': 0.2}
 
@@ -1899,7 +1909,9 @@ def apply_webnet():
         phase_position=phase_position[want_phase], phaser=pie)
     tracers = []
 
-    load_coupler = False
+    load_coupler = True
+    if load_coupler:
+        logger.warn('LOAD COUPLER')
     #fn_coupler = 'dummy_webnet_pairing_%s.yaml' % want_phase
     fn_coupler = 'webnet_pairing_%s.yaml' % want_phase
 
@@ -1954,17 +1966,6 @@ def apply_webnet():
             tracers.extend(pair)
             pairs.append(pair)
 
-    #for r in pairs_by_rays:
-    #    s1, s2, t, td, pd = r
-    #    tracer1 = DataTracer(
-    #        data_pile=data_pile, source=s1, target=t, chopper=p_chopper, channel=channel)
-    #    tracer2 = DataTracer(
-    #        data_pile=data_pile, source=s2, target=t, chopper=p_chopper, channel=channel)
-    #    pair = [tracer1, tracer2]
-    #    tracers.extend(pair)
-    #    pairs.append(pair)
-
-    #tracers = builder.build(tracers, snuffle=True)
     colors = UniqueColor(tracers=tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
@@ -1972,21 +1973,30 @@ def apply_webnet():
     #plt.show()
     testcouples = []
     pb = progressbar.ProgressBar(maxval=len(pairs), widgets=pb_widgets('processing couples')).start()
+    goods = 0
+    bads = 0
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
         testcouple = SyntheticCouple(master_slave=pair, method=method)
         testcouple.process()
         if testcouple.good:
             testcouples.append(testcouple)
+            goods += 1
+        else:
+            bads += 1
+    print 'goods', goods
+    print 'bads', bads
     pb.finish()
+    plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
     inverter = QInverter(couples=testcouples)
     inverter.invert()
-    for tc in num.random.choice(testcouples, 10):
-        tc.plot(infos=infos, colors=colors)
-    inverter.plot(q_threshold=500)
+    for i, tc in enumerate(num.random.choice(testcouples, 10)):
+        fn = 'application/%s/example_%s.png' % (want_phase, str(i).zfill(2))
+        tc.plot(infos=infos, colors=colors, savefig=fn)
+    inverter.plot(q_threshold=600)
     fig = plt.gcf()
-    fig.savefig('hist_databasetest.png', dpi=200)
+    fig.savefig('application/%s/hist_application.png' % want_phase, dpi=600)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     couples = inverter.couples
     analyze(couples)
@@ -2043,7 +2053,6 @@ if __name__=='__main__':
     #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
     dbtest()
-    # TODO: !!! !!!!!!!!!!!!!!! Synthetics in displacemtn!!!!!!!!!!!!!!!1
     #apply_webnet()
     plt.show()
     #noise_test()
