@@ -987,40 +987,52 @@ def dbtest(noise_level=0.00000005):
                 'elevation': 0., 'codes': ('CZ', 'VAC', '', channel), 'store_id': store_id}
                 #'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
             targets = [Target(lat=lat, lon=lon, **target_kwargs)]
-            noise_pile = None
-            source_depths = num.arange(zmin, zmax, 400)
-            distances = num.arange(8000, 12000., 400)
-            #distances = num.arange(0., 2000., 200)
+            source_depths = num.arange(zmin, zmax, 100)
             sources = []
             for d in distances:
                 d = num.sqrt(d**2/2.)
                 for sd in source_depths:
                     mag = float(1.6+num.random.random()*2)
-                    #mag = float(1.)
+                    #mag = float(1.6+num.random.random()*0.5)
                     #strike, dip, rake = moment_tensor.random_strike_dip_rake()
                     strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                              dipmin, dipmax,
                                                                              rakemin, rakemax)
-                    sources.append(DCSourceWid(
-                        lat=float(lat),
-                        lon=float(lon),
-                        depth=float(sd),
-                        magnitude=float(mag),
-                        strike=float(strike),
-                        dip=float(dip),
-                        rake=float(rake),
-                        north_shift=float(d),
-                        east_shift=float(d),
-                        stf=get_stf(type=stf_type),
-                        brunes=brunes))
+                    mt = moment_tensor.MomentTensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
+                    e = model.Event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
+                    #a = source_radius([mag])
+                    sources.append(e2extendeds(e, north_shift=float(d),
+                                               east_shift=float(d),
+                                               stf_type=stf_type))
+                    #wl = num.sqrt(a)
+                    #nucleation_x, nucleation_y = num.random.random(2)*2-1.1
+                    #sources.append(RectangularSource(
+                    #    lat=float(lat),
+                    #    lon=float(lon),
+                    #    depth=float(sd),
+                    #    magnitude=float(mag),
+                    #    strike=float(strike),
+                    #    dip=float(dip),
+                    #    rake=float(rake),
+                    #    width=float(wl),
+                    #    length=float(wl),
+                    #    north_shift=float(d),
+                    #    east_shift=float(d),
+                    #    stf=get_stf(type=stf_type),
+                    #    nucleation_x=float(nucleation_x),
+                    #    nucleation_y=float(nucleation_y)))
+                    #    #brunes=brunes))
+            fig, ax = Animator.get_3d_ax()
+            Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
+            Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
+            plt.show()
 
         elif use_real_shit is True:
-
             targets = [s2t(s, channel, store_id=store_id) for s in stations]
             events = filter(lambda x: x.depth>zmin and x.depth<zmax, events)
             events = filter(lambda x: x.magnitude>=min_magnitude, events)
             events = filter(lambda x: x.magnitude<=max_magnitude, events)
-            sources = [e2s(e) for e in events]
+            sources = [e2extendeds(e) for e in events]
             for s in sources:
                 strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                          dipmin, dipmax,
@@ -1128,6 +1140,30 @@ def reset_events(markers, events):
 def s2t(s, channel='Z', store_id=None):
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation,
                   codes=(s.network, s.station, s.location, channel), store_id=store_id)
+
+
+def e2extendeds(e, north_shift=0., east_shift=0., stf_type=None):
+    if e.moment_tensor:
+        mt = e.moment_tensor
+        mag = mt.magnitude
+    else:
+        mt = False
+        mag = e.magnitude
+    a = source_radius([mag])
+    d = num.sqrt(a[0])
+    nucleation_x, nucleation_y = num.random.random(2)*1.-0.5
+    #print nucleation_x, nucleation_y
+    #nucleation_x, nucleation_y = num.random.random(2)*2-1
+    #nucleation_x, nucleation_y = 0., 0.
+
+    stf = get_stf(mag, type=stf_type)
+    return RectangularSource(
+        lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
+        east_shift=east_shift, time=e.time, length=float(d), width=float(d),
+        strike=mt.strike1, dip=mt.dip1, rake=mt.rake1, magnitude=mag,
+        nucleation_x=float(nucleation_x), nucleation_y=float(nucleation_y),
+        stf=stf)
+
 
 def e2s(e):
     #s = SourceWithMagnitude.from_pyrocko_event(e)
