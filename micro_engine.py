@@ -9,7 +9,7 @@ from pyrocko import guts
 from pyrocko import io
 from pyrocko import util
 from pyrocko import pz
-from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter
+from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
 from pyrocko.guts import Float
@@ -388,10 +388,11 @@ class Tracer:
             for tr in traces:
                 #tr.snuffle()
                 #tr_c = tr.copy()
-                if self.source.brunes:
-                    self.source.brunes.preset(source=self.source, target=self.target)
-                    tr = tr.transfer(transfer_function=self.source.brunes)
-                    #trace.snuffle([tr_c, tr])
+                if not isinstance(self.source, RectangularSource):
+                    if self.source.brunes:
+                        self.source.brunes.preset(source=self.source, target=self.target)
+                        tr = tr.transfer(transfer_function=self.source.brunes)
+                        #trace.snuffle([tr_c, tr])
 
                 tr = self._apply_transfer(tr)
                 if self.target.filter:
