@@ -112,6 +112,9 @@ class Coupler():
             i += 1
         pb.finish()
         print 'failed: %s, passed:%s ' % (failed, passed)
+        if passed == 0:
+            raise Exception('Coupling failed')
+
         if dump_to:
             self.filtrate.validate()
             self.filtrate.dump(filename=dump_to)
@@ -129,7 +132,6 @@ class Coupler():
         has_segments = True
         if isinstance(data, Filtrate):
             has_segments = False
-
         for r in data:
             if has_segments:
                 e1, e2, t, traveled_d, passing_d, segments = r
@@ -149,8 +151,9 @@ class Coupler():
                 continue
             else:
                 filtered.append(r)
+        if len(filtered)==0:
+            raise Exception('len(filtered) == 0!')
         print '%s of %s pairs passed' %(len(filtered), len(data))
-
         return filtered
 
     def get_passing_distance(self, ray_points, x0):
