@@ -853,52 +853,6 @@ def invert_test_2D_parallel(noise_level=0.001):
     plt.show()
 
 
-def fmin_by_magnitude(magnitude, stress=0.1, vr=2750):
-    Mo = moment_tensor.magnitude_to_moment(magnitude)
-    duration = M02tr(Mo, stress, vr)
-    return 1./duration
-
-class Magnitude2fmin():
-    def __init__(self, stress, vr, lim):
-        self.stress = stress
-        self.vr = vr
-        self.lim = lim
-
-    def __call__(self, magnitude):
-        return max(fmin_by_magnitude(magnitude, self.stress, self.vr), self.lim)
-
-    @classmethod
-    def setup(cls, stress=0.1, vr=2750, lim=0.):
-        return cls(stress, vr, lim)
-
-    def plot(self):
-        mags = num.linspace(-1, 4, 50)
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        ax.plot(mags, self(mags))
-        ax.set_xlabel('magnitude')
-        ax.set_ylabel('fmin')
-
-class Magnitude2Window():
-    def __init__(self, t_static, t_factor):
-        self.t_static = t_static
-        self.t_factor = t_factor
-
-    def __call__(self, magnitude):
-        return self.t_static+self.t_factor/fmin_by_magnitude(magnitude)
-
-    @classmethod
-    def setup(cls, t_static=0.1, t_factor=5.):
-        return cls(t_static, t_factor)
-
-    def plot(self):
-        mags = num.linspace(-1, 4, 50)
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        ax.plot(mags, self(mags))
-        ax.set_xlabel('magnitude')
-        ax.set_ylabel('time')
-
 
 def plot_response(response, ax=None):
     if ax==None:
@@ -917,9 +871,9 @@ def wanted_q(mod, z):
     return q
 
 
-def dbtest(noise_level=0.00005):
+def dbtest(noise_level=0.00000005):
     print '-------------------db test-------------------------------'
-    use_real_shit = True
+    use_real_shit = False
     load_coupler = False
     #want_station = ('CZ', 'NKC', '')
     #want_station = ('CZ', 'KAC', '')
@@ -931,10 +885,11 @@ def dbtest(noise_level=0.00005):
     min_magnitude = 1.5
     max_magnitude = 5.4
     fminrange = 20.
-    use_common = False
+    #use_common = False
+    use_common = True
     fmax = 75.
-    #fmin = 30.
-    fmin = 20.
+    fmin = 30.
+    #fmin = 20.
     #window_by_magnitude = Magnitude2Window.setup(0.1, 4.)
     window_by_magnitude = Magnitude2Window.setup(0.2, 4.)
     fmin_by_magnitude = Magnitude2fmin.setup(lim=fmin)
@@ -947,21 +902,23 @@ def dbtest(noise_level=0.00005):
     #store_id = 'qplayground_10000m_continuous2_q25'
     #store_id = 'qplayground_10000m_continuous2_q800'
     #store_id = 'qplayground_10000m_continuous2_noflatearth'
-    store_id = 'qplayground_total_2'
+    #store_id = 'qplayground_total_2'
     #store_id = 'qplayground_total_2_q400'
     #store_id = 'qplayground_total_1_q400'
+    store_id = 'qplayground_total_4_hr'
     strikemin = 160
     strikemax = 180
     dipmin = -60
     dipmax = -80
     rakemin = 20
     rakemax = 40
-    engine = LocalEngine(store_superdirs=['/data/stores'])
+    engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
     store = engine.get_store(store_id)
     config = engine.get_store_config(store_id)
     mod = config.earthmodel_1d
-    zmin = config.source_depth_min
-    zmax = config.source_depth_max
+    gf_padding = 50
+    zmin = config.source_depth_min + gf_padding
+    zmax = config.source_depth_max - gf_padding
     dist_min = config.distance_min
     dist_max = config.distance_max
     plot_model(mod, parameters=['vp', 'qp'])
@@ -971,21 +928,23 @@ def dbtest(noise_level=0.00005):
     tt_mu = 0.
     tt_sigma = 0.2
     save_figs = True
-    #perturbation = TTPerturbation(mu=tt_mu, sigma=tt_sigma)
+
+    # distances used if not real sources:
+    distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 500)
+
     perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation.plot()
     p_chopper = Chopper('first(p)', phase_position=0.4,
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
-    stf_type = 'brunes'
+    #stf_type = 'brunes'
     #stf_type = 'halfsin'
+    stf_type = None
     tracers = []
     want_phase = 'p'
     fn_coupler = 'synthetic_pairing.yaml'
     fn_noise = '/media/usb/webnet/mseed/noise.mseed'
     fn_records = '/media/usb/webnet/mseed'
-    #noise = RandomNoiseConstantLevel(noise_level)
-    noise = Noise(files=fn_noise, scale=noise_level)
     if stf_type=='brunes':
         # mu nachschauen!
         # beta aus Modell
@@ -993,9 +952,11 @@ def dbtest(noise_level=0.00005):
     else:
         brunes = None
 
-    if noise:
+    if use_real_shit:
+        noise = Noise(files=fn_noise, scale=noise_level)
         noise_pile = pile.make_pile(fn_records)
     else:
+        noise = RandomNoiseConstantLevel(noise_level)
         noise_pile = None
 
     events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
@@ -1082,17 +1043,13 @@ def dbtest(noise_level=0.00005):
         #plot_response(response=targets[0].filter.response)
         logger.info('number of sources: %s' % len(sources))
         logger.info('number of targets: %s' % len(targets))
-        #for t in targets:
-        #    t.validate()
-        #for s in sources:
-        #    s.validate()
         coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
                         ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
     fig, ax = Animator.get_3d_ax()
-    #Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
     Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate, max_mag_diff=2.5)
+    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate, max_mag_diff=0.1)
     animator = Animator(pairs_by_rays)
+    plt.show()
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
     paired_sources = []
     for p in pairs_by_rays:
@@ -1115,24 +1072,22 @@ def dbtest(noise_level=0.00005):
     pairs = []
     for r in pairs_by_rays:
         s1, s2, t  = r[0:3]
-        fmin1 = fmin_by_magnitude(s1.magnitude)
-        tracer1 = Tracer(s1, t, p_chopper, channel=channel, fmin=fmin1,
-                         fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
-        dist1, depth1 = tracer1.get_geometry()
-        if dist1< dist_min or dist1>dist_max:
-            continue
-        fmin2 = fmin_by_magnitude(s2.magnitude)
-        tracer2 = Tracer(s2, t, p_chopper, channel=channel, fmin=fmin2,
-                         fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
-        dist2, depth2 = tracer1.get_geometry()
-        if fmax-fmin1<fminrange or fmax-fmin2<fminrange:
-            continue
-        if dist2< dist_min or dist2>dist_max:
-            continue
-        else:
-            pair = [tracer1, tracer2]
+        fmin2 = None
+        pair = []
+        for sx in [s1, s2]:
+            fmin1 = fmin_by_magnitude(sx.magnitude)
+            tracer1 = Tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
+                             fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
+            dist1, depth1 = tracer1.get_geometry()
+            if dist1< dist_min or dist1>dist_max:
+                continue
+            if fmax-fmin1<fminrange:
+                continue
+            pair.append(tracer1)
             tracers.extend(pair)
             pairs.append(pair)
+    if len(tracers)==0:
+        raise Exception('No tracers survived to assessment')
 
     builder = Builder()
     tracers = builder.build(tracers, engine=engine, snuffle=False)
@@ -1344,11 +1299,9 @@ def analyze(couples):
     fig = plt.figure()
     ax = fig.add_subplot(2, 1, 1)
     ax.plot(mags, Qs, 'bo')
-    #ax.set_ylim(0, 2500)
     ax.set_title('mean magnitude vs Q')
     ax = fig.add_subplot(2, 1, 2)
     ax.plot(magdiffs, Qs, 'bo')
-    #ax.set_ylim(0, 2500)
     ax.set_title('magnitude difference vs Q')
 
     nrow = 3
