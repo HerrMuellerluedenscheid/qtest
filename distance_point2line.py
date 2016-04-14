@@ -86,10 +86,11 @@ class Coupler():
                     continue
 
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
+                incidence_angle = arrival[0].incidence_angle()
                 try:
                     n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
                 except IndexError as err:
-                    print 'Error> ', err
+                    print '!!!Error> ', err
                     continue
 
                 n = n * cake.d2m
@@ -98,7 +99,8 @@ class Coupler():
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
                     try:
-                        traveled_distance, passing_distance, segments = self.get_passing_distance(points_of_segments, num.array(ned_cmp))
+                        traveled_distance, passing_distance, segments = self.get_passing_distance(
+                            points_of_segments, num.array(ned_cmp))
                         passed += 1
                     except IndexError:
                         failed += 1
@@ -106,8 +108,14 @@ class Coupler():
                     if ignore_segments:
                         segments = []
                     if traveled_distance:
-                        self.filtrate.couples.append([ev, cmp_e, t, float(traveled_distance), float(passing_distance)])
-                    self.results.append((ev, cmp_e, t, traveled_distance, passing_distance, segments))
+                        self.filtrate.couples.append([
+                            ev, cmp_e, t, float(traveled_distance),
+                            float(passing_distance),
+                            float(self.ray_length(arrival[0])),
+                            float(incidence_angle)])
+                    self.results.append(
+                        (ev, cmp_e, t, traveled_distance, passing_distance,
+                         segments, incidence_angle))
             pb.update(i)
             i += 1
         pb.finish()
@@ -118,6 +126,11 @@ class Coupler():
         if dump_to:
             self.filtrate.validate()
             self.filtrate.dump(filename=dump_to)
+
+    def ray_length(self, arrival):
+        z, x, t = arrival.zxt_path_subdivided()
+        return num.sum(num.sqrt(num.diff(num.array(x)*cake.d2m)**2+num.diff(num.array(z))**2))
+
 
     def is_relevant(self, source, target, p):
         if p==False or p ==None:
@@ -134,9 +147,9 @@ class Coupler():
             has_segments = False
         for r in data:
             if has_segments:
-                e1, e2, t, traveled_d, passing_d, segments = r
+                e1, e2, t, traveled_d, passing_d, segments, incidence_angle = r
             else:
-                e1, e2, t, traveled_d, passing_d = r
+                e1, e2, t, traveled_d, passing_d, totald, incidence_angle = r
             if abs(e1.magnitude-e2.magnitude)>max_mag_diff:
                 continue
 
@@ -387,6 +400,17 @@ def hitcount_map_from_file(filename, stations=None, save_to='hitcount_map.png'):
     fig.savefig('hitcount_map.png', dpi=200)
     plt.show()
 
+
+def fresnel_lambda(total_length, td, pd):
+    '''Wave length by Fresnel volume
+
+    :param total_length: ray length
+    :param td: traveled distance
+    :param pd: passing distance
+    '''
+    d2 = total_length-td
+    lda = pd**2*total_length/(td*d2)
+    return lda
 
 def hitcount_map(hit_counter, stations, save_to='hitcount_map.png'):
     #data = num.zeros(len(hit_counter)*3).reshape(-1, 3)
