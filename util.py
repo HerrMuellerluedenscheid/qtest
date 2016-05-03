@@ -14,7 +14,7 @@ def M02tr(Mo, stress, vr):
     return tr
 
 
-def fmin_by_magnitude(magnitude, stress=0.1, vr=2750):
+def fmin_by_magnitude(magnitude, stress=0.1, vr=3500):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
     duration = M02tr(Mo, stress, vr)
     return 1./duration
