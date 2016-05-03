@@ -9,7 +9,8 @@ from pyrocko import guts
 from pyrocko import io
 from pyrocko import util
 from pyrocko import pz
-from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource
+from pyrocko.cake import m2d
+from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource, CircularSource, OutOfBounds
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
 from pyrocko.guts import Float
@@ -339,6 +340,8 @@ class Tracer:
         self.runner = None
         self.source = source
         self.target = target
+        self.back_azimuth = kwargs.get('back_azimuth', None)
+        self.incidence_angle = kwargs.get('incidence_angle', None)
         self.tinc = kwargs.pop('tinc', None)
         self.config = kwargs.pop('config', None)
         self.traces = None
@@ -346,6 +349,7 @@ class Tracer:
         self.chopper = chopper
         self.kwargs = kwargs
         self.channel = channel
+        self.want_trace_length = None
         self.perturbation = kwargs.pop('perturbation', 0.)
         self.want = kwargs.pop('want', 'displacement')
         self.fmin = kwargs.pop('fmin', -99999.)
@@ -375,42 +379,51 @@ class Tracer:
     def differentiate(self, tr):
         t = tr.tmax - tr.tmin
         sr = 0.5/tr.deltat
-        return tr.transfer(transfer_function=diff_response, freqlimits=(1./t, 1.1/t, sr*0.7, sr*0.9), tfade=t*0.15)
+        return tr.transfer(transfer_function=diff_response,
+                           freqlimits=(1./t, 1.1/t, sr*1.1, sr*1.5),
+                           tfade=t*0.15)
 
     def simulate(self, tr):
         return tr.transfer(transfer_function=self.target.filter.response)
 
     def setup_from_engine(self, engine=None):
         if engine and self.target.store_id:
-            response = engine.process(sources=[self.source], targets=[self.target])
+            try:
+                response = engine.process(sources=[self.source], targets=[self.target])
+            except OutOfBounds as e:
+                self.traces = e
+                return True
             traces = response.pyrocko_traces()
-            processed = []
+            proc = []
             for tr in traces:
-                #tr.snuffle()
-                #tr_c = tr.copy()
-                if not isinstance(self.source, RectangularSource):
+                #if not isinstance(self.source, RectangularSource) and not isinstance(self.source, CircularSource):
+                if not isinstance(self.source, CircularSource):
                     if self.source.brunes:
                         self.source.brunes.preset(source=self.source, target=self.target)
                         tr = tr.transfer(transfer_function=self.source.brunes)
-                        #trace.snuffle([tr_c, tr])
-
                 tr = self._apply_transfer(tr)
                 if self.target.filter:
                     tr = self.simulate(tr)
-                processed.append(tr)
-            self.traces = processed
-
+                proc.append(tr)
+            self.traces = proc
             #self.traces = rotate_rtz(self.traces)
             self.config = engine.get_store_config(self.target.store_id)
             return True
         return
 
     def process(self, **pp_kwargs):
+        '''seems to be visited twice...!'''
         tr = self.processed
         if not tr:
+            if isinstance(self.traces, OutOfBounds):
+                self.processed = self.traces
+                return self.processed
             tr_raw = self.filter_by_channel(self.channel).copy()
             tr = self.chopper.chop(self.source, self.target, tr_raw)
-        self.processed = tr
+            self.processed = tr
+        if isinstance(self.processed, OutOfBounds):
+            return tr
+
         return self.post_process(tr, **pp_kwargs)
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
@@ -418,7 +431,10 @@ class Tracer:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
         if noise:
             tr = noise.noisify(tr)
-
+        trace_length = tr.tmax-tr.tmin
+        if self.want_trace_length is not None and trace_length!=self.want_trace_length:
+            diff = trace_length - self.want_trace_length
+            tr.extend(tmin=tr.tmin-diff, tr=tr.tmax)
         return tr
 
     def filter_by_channel(self, channel):
@@ -449,19 +465,37 @@ class Tracer:
         return self.config.id
 
 class DataTracer(Tracer):
-    def __init__(self, **kwargs):
-        self.data_pile = kwargs.pop('data_pile')
+    def __init__(self, incidence_angle=0., data_pile=None,
+                 rotate_channels=False, **kwargs):
         kwargs.update({'no_config': True})
         Tracer.__init__(self, **kwargs)
+        self.data_pile = data_pile
+        self.rotate_channels = rotate_channels
+        self.incidence_angle = incidence_angle
+        self.back_azimuth = self.target.azibazi_to(self.source)[1]
 
     def setup_data(self):
         self.process()
         return True
 
-    def process(self, **pp_kwargs):
+    def process(self):
         tr = self.processed
         if not tr:
-            tr = self.chopper.chop_pile(self.data_pile, self.source, self.target)
+            if self.rotate_channels:
+                trs = self.chopper.chop_pile(
+                    self.data_pile, self.source, self.target, all_channels=True)
+                if trs is None:
+                    tr = None
+                else:
+                    trs = trace.rotate_to_lqt(
+                        trs, self.back_azimuth, self.incidence_angle,
+                        in_channels=self.rotate_channels['in_channels'],
+                        out_channels=self.rotate_channels['out_channels'])
+                    tr = filter(tr.channel==self.channel, trs)
+            else:
+                tr = self.chopper.chop_pile(
+                    self.data_pile, self.source, self.target, all_channels=False)
+
         self.traces = [tr]
         self.processed = tr
         return tr
@@ -504,7 +538,7 @@ class Chopper():
         self.chopped.add(s, t, tr)
         return tr
 
-    def chop_pile(self, data_pile, source, target):
+    def chop_pile(self, data_pile, source, target, all_channels=False):
         tstart = self.phase_pie.t(self.startphasestr, (source, target))
         if not tstart:
             return tstart
@@ -514,14 +548,16 @@ class Chopper():
         else:
             tend = self.fixed_length + tstart
         tstart, tend = self.setup_time_window(tstart, tend)
-        select = lambda x: x.nslc_id == target.codes
-
+        if all_channels:
+            select = lambda x: x.nslc_id == target.codes
+        else:
+            select = lambda x: x.nslc_id[:3] == target.codes[:3]
         # A little dangerous:
         try:
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
         except IndexError as e:
             tr = None
-        self.chopped.add(source, target, tr) 
+        self.chopped.add(source, target, tr)
         return tr
 
     def setup_time_window(self, tstart, tend):
