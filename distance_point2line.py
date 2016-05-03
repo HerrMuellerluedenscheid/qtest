@@ -11,6 +11,9 @@ from pyrocko import util
 from pyrocko.gf import ExplosionSource, Source, DCSource, Target, meta, SourceWithMagnitude
 from pyrocko.guts import List, Object, String, Tuple, Float
 import progressbar
+import logging
+import sys
+logger = logging.getLogger()
 
 
 class UniqueColor():
@@ -74,20 +77,22 @@ class Coupler():
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False, check_relevance_by=False):
         self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
         phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
-        pb = progressbar.ProgressBar(maxval=len(sources)).start()
         i = 0
         self.hookup = Hookup.from_locations(targets)
-        ne_from_center = []
         failed = 0
         passed = 0
+        logger.info('start coupling events')
+        widgets = ['event couples ', progressbar.Percentage(), progressbar.Bar()]
+        pb = progressbar.ProgressBar(maxval=len(sources), widgets=widgets).start()
         for i_e, ev in enumerate(sources):
+            pb.update(i_e)
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
 
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
-                incidence_angle = arrival[0].incidence_angle()
                 try:
+                    #incidence_angle = arrival[0].incidence_angle()
                     n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
                 except IndexError as err:
                     print '!!!Error> ', err
@@ -105,17 +110,19 @@ class Coupler():
                     except IndexError:
                         failed += 1
                         continue
-                    if ignore_segments:
-                        segments = []
+                    #if ignore_segments:
+                    #    segments = []
                     if traveled_distance:
                         self.filtrate.couples.append([
                             ev, cmp_e, t, float(traveled_distance),
                             float(passing_distance),
-                            float(self.ray_length(arrival[0])),
-                            float(incidence_angle)])
-                    self.results.append(
-                        (ev, cmp_e, t, traveled_distance, passing_distance,
-                         segments, incidence_angle))
+                            #float(self.ray_length(arrival[0])),
+                            None,
+                            #float(incidence_angle)])
+                            None])
+                    #self.results.append(
+                    #    (ev, cmp_e, t, traveled_distance, passing_distance,
+                    #     segments, incidence_angle))
             pb.update(i)
             i += 1
         pb.finish()
@@ -323,7 +330,7 @@ def project2enz(arrival, azimuth_deg):
 def stats_by_station(results):
     hit_counter = {}
     for r in results:
-        s1, s2, t, p, td= r
+        s1, s2, t, td, pd, totald, incidence_angle = r
         if not t in hit_counter:
             hit_counter[t] = 1
         else:
@@ -412,7 +419,7 @@ def fresnel_lambda(total_length, td, pd):
     lda = pd**2*total_length/(td*d2)
     return lda
 
-def hitcount_map(hit_counter, stations, save_to='hitcount_map.png'):
+def hitcount_map(hit_counter, stations, events=None, save_to='hitcount_map.png'):
     #data = num.zeros(len(hit_counter)*3).reshape(-1, 3)
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -428,11 +435,16 @@ def hitcount_map(hit_counter, stations, save_to='hitcount_map.png'):
         ax.text(x, y, label,
                 bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
 
+    if events is not None:
+        for e in events:
+            ax.plot(e.lon, e.lat, 'ro', alpha=0.3)
+
     ax.set_ymargin(0.01)
     ax.set_xmargin(0.01)
     ax.set_xlabel('longitude [$^\circ$]')
     ax.set_ylabel('latitude [$^\circ$]')
-    fig.savefig('hitcount_map.png')
+    fig.savefig('hitcount_map.png', dpi=200)
+    plt.tight_layout()
     plt.show()
 
 
@@ -467,6 +479,7 @@ def plot_stations(stations):
     ax = fig.add_subplot(111)
     for s in stations:
         ax.plot(s.lon, s.lat, 'bo')
+    plt.tight_layout()
     plt.show()
 
 
@@ -491,7 +504,6 @@ if __name__=='__main__':
     #hitcount = stats_by_station(filtered)
     #X, Y, Z = xyz_from_hitcount(hitcount)
     #num.savetxt('hitcount.txt', num.column_stack((X, Y, Z)))
-    #hitcount_map(hitcount, webnet_stations)
     #make_animation(filtered, colormap)
 
     # here goes the later calculated full extension of the seismogenic zone
@@ -502,9 +514,9 @@ if __name__=='__main__':
     webnet_stations = model.load_stations('/data/meta/stations.pf')
     #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
     #print 'exiting.....'
-    #sys.exit(0)
     #stations = make_station_grid(webnet_stations, num_n=5, num_e=4, edge_stretch=0.2)
-    stations = webnet_stations
+    stations = make_station_grid(webnet_stations, num_n=20, num_e=20, edge_stretch=1.0)
+    #stations = webnet_stations
     plot_stations(stations)
     colormap = UniqueColor(tracers=stations)
     phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
@@ -515,16 +527,22 @@ if __name__=='__main__':
     #fig, ax = get_3d_ax()
     all_results = []
     results = []
-    pool = multiprocessing.Pool()
+    #pool = multiprocessing.Pool()
     nevents = 120
+    #nevents = 15
     coupler = Coupler()
     from q import s2t, e2s
     from pyrocko.gf import SourceWithMagnitude
     targets = [s2t(s) for s in stations]
     sources = [SourceWithMagnitude(lat=e.lat, lon=e.lon, depth=e.depth) for e in events]
-    coupler.process(num.random.choice(sources, nevents), targets, earthmodel, phases=None, ignore_segments=True)
+    coupler.process(num.random.choice(sources, nevents), targets, earthmodel,
+                    phases=None, ignore_segments=True)
     filtered = coupler.filter_pairs(4., 1000., data=coupler.filtrate)
     hitcount = stats_by_station(filtered)
+    hitcount_map(hitcount, webnet_stations, events)
+    #hitcount_map(filtered, webnet_stations)
+    plt.show()
+    sys.exit(0)
     distances = get_distances(filtered)
     depths = get_depths(filtered)
     fig = plt.figure()
