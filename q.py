@@ -5,7 +5,7 @@ mpl.rc('xtick', labelsize=10)
 
 import copy
 import progressbar
-from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, SourceWithMagnitude, CircularSource, OutOfBounds
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, SourceWithMagnitude, OutOfBounds
 from pyrocko.guts import String
 from pyrocko import orthodrome
 from pyrocko.gui_util import PhaseMarker
@@ -986,19 +986,19 @@ def wanted_q(mod, z):
 
 def dbtest(noise_level=0.00000005):
     print '-------------------db test-------------------------------'
-    use_real_shit = True
-    use_extended_sources = False
-    use_responses = True                            # 2 TEST
+    use_real_shit = False
+    use_extended_sources = True
+    use_responses = True                            # 2 test
     load_coupler = False
     test_scenario = False
-    #want_station = ('CZ', 'NKC', '')
-    #want_station = ('CZ', 'KAC', '')
+    #want_station = ('cz', 'nkc', '')
+    #want_station = ('cz', 'kac', '')
     want_station = 'all'
     lat = 50.2059
     lon = 12.5152
     sources = []
-    #method = 'mtspec'
-    method = 'sine_psd'
+    method = 'mtspec'
+    #method = 'sine_psd'
     min_magnitude = 0.1
     max_magnitude = 6.
     fminrange = 20.
@@ -1006,10 +1006,10 @@ def dbtest(noise_level=0.00000005):
     use_common = True
     fmax_lim = 80.
     fmin = 31.
-    fmin = Magnitude2fmin.setup(lim=fmin)
+    fmin = magnitude2fmin.setup(lim=fmin)
     fmax = 90.
-    #window_by_magnitude = Magnitude2Window.setup(0.3, 4.)
-    window_by_magnitude = Magnitude2Window.setup(0.2, 4.)
+    #window_by_magnitude = magnitude2window.setup(0.3, 4.)
+    window_by_magnitude = magnitude2window.setup(0.2, 4.)
     #store_id = 'qplayground_invtest7'
     #store_id = 'qplayground_30000m_2'
     #store_id = 'qplayground_30000m_waveform_sampling5'
@@ -1019,14 +1019,14 @@ def dbtest(noise_level=0.00000005):
     #store_id = 'qplayground_10000m_continuous2_q25'
     #store_id = 'qplayground_10000m_continuous2_q800'
     #store_id = 'qplayground_10000m_continuous2_noflatearth'
-    store_id = 'qplayground_total_2'
+    #store_id = 'qplayground_total_2'
     #store_id = 'qplayground_total_2_q25'
     #store_id = 'qplayground_total_2_q400'
     #store_id = 'qplayground_total_1_q400'
-    #store_id = 'qplayground_total_4_hr'
+    store_id = 'qplayground_total_4_hr'
     #store_id = 'qplayground_total_4_mr_full'
 
-    # setting the DC components:
+    # setting the dc components:
     strikemin = 160
     strikemax = 180
     dipmin = -60
@@ -1040,7 +1040,7 @@ def dbtest(noise_level=0.00000005):
     #rakemin = 30
     #rakemax = 30
 
-    engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
+    engine = localengine(store_superdirs=['/data/stores', '/media/usb/stores'])
     store = engine.get_store(store_id)
     config = engine.get_store_config(store_id)
     mod = config.earthmodel_1d
@@ -1056,9 +1056,9 @@ def dbtest(noise_level=0.00000005):
     channel = 'SHZ'
     tt_mu = 0.
     tt_sigma = 0.0001
-    save_figs = True
+    save_figs = true
     nucleation_radius = 0.1
-    #nucleation_radius = None
+    #nucleation_radius = none
     #nucleation_radius = 'bothlefttoright'
 
     # distances used if not real sources:
@@ -1069,38 +1069,38 @@ def dbtest(noise_level=0.00000005):
         distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 200)
         source_depths = num.arange(zmin, zmax, 200)
 
-    perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
+    perturbation = uniformttperturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation.plot()
-    p_chopper = Chopper('first(p)', phase_position=0.4,
+    p_chopper = chopper('first(p)', phase_position=0.4,
                         by_magnitude=window_by_magnitude,
-                        phaser=PhasePie(mod=mod))
+                        phaser=phasepie(mod=mod))
     stf_type = 'brunes'
     #stf_type = 'halfsin'
-    #stf_type = None
+    #stf_type = none
     tracers = []
     want_phase = 'p'
     fn_coupler = 'dummy_coupling.yaml'
-    #fn_coupler = None
+    #fn_coupler = none
     fn_noise = '/media/usb/webnet/mseed/noise.mseed'
     fn_records = '/media/usb/webnet/mseed'
     if use_real_shit:
-        noise = Noise(files=fn_noise, scale=noise_level)
+        noise = noise(files=fn_noise, scale=noise_level)
         noise_pile = pile.make_pile(fn_records)
     else:
-        noise = RandomNoiseConstantLevel(noise_level)
-        noise_pile = None
+        noise = randomnoiseconstantlevel(noise_level)
+        noise_pile = none
 
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    events = list(model.event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
     all_depths = [e.depth for e in events]
     some_depths = [d/1000. for d in all_depths if d>8500]
     fig = plt.figure(figsize=(6,8))
     ax = fig.add_subplot(1, 2, 1)
-    ax.set_title('$Q_p$ Model')
+    ax.set_title('$q_p$ model')
     #ax.set_xticks([100, 200, 300])
     ax.invert_yaxis()
     ax.set_ylim(0, 12.)
     plot_model(mod, ax=ax, parameters=['qp'])
-    #ax.axes.get_yaxis().set_visible(False)
+    #ax.axes.get_yaxis().set_visible(false)
     ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
 
     #ax = fig.add_subplot(1, 3, 1, sharey=ax)
@@ -1109,18 +1109,18 @@ def dbtest(noise_level=0.00000005):
     #ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
     #ax.set_ylim(0, 12.)
     ##ax.set_ylim(0, 12000.)
-    #ax.axes.get_yaxis().set_visible(True)
+    #ax.axes.get_yaxis().set_visible(true)
 
     ax = fig.add_subplot(1, 2, 2, sharey=ax)
-    ax.set_title('Source Depths')
+    ax.set_title('source depths')
     ax.hist(some_depths, bins=17, orientation='horizontal')
     ax.set_xlabel('count')
     ax.set_ylim(0, 12.)
-    ax.axes.get_yaxis().set_visible(False)
+    ax.axes.get_yaxis().set_visible(false)
     #ax.yaxis.tick_right()
     ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
     #ax.set_ylim(0, 12000)
-    #plt.gca().xaxis.set_major_locator(mpl.ticker.MaxNLocator(prune='lower'))
+    #plt.gca().xaxis.set_major_locator(mpl.ticker.maxnlocator(prune='lower'))
     fig.subplots_adjust(wspace=0.11, right=0.98, top=0.94)
     ax.set_xticks(num.arange(0, 120., 30.))
     #plt.tight_layout()
@@ -1138,25 +1138,25 @@ def dbtest(noise_level=0.00000005):
     #lon = float(num.mean([e.lon for e in events]))
     stations = model.load_stations('/data/meta/stations.cz.pf')
     if not want_station=='all':
-        print 'Warning: only using station: %s' %'.'.join(want_station)
+        print 'warning: only using station: %s' %'.'.join(want_station)
         stations = filter(lambda x: want_station == x.nsl(), stations)
 
 
     if load_coupler:
         print 'load coupler'
-        filtrate = Filtrate.load(filename=fn_coupler)
+        filtrate = filtrate.load(filename=fn_coupler)
         sources = filtrate.sources
-        coupler = Coupler(filtrate)
+        coupler = coupler(filtrate)
         print 'done'
     else:
-        coupler = Coupler()
+        coupler = coupler()
         if use_real_shit is False:
             target_kwargs = {
-                #'elevation': 0., 'codes': ('CZ', 'KVC', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('CZ', 'LBC', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('CZ', 'KAZ', '', channel), 'store_id': store_id}
-                'elevation': 0., 'codes': ('CZ', 'VAC', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('CZ', 'NKC', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('cz', 'kvc', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('cz', 'lbc', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('cz', 'kaz', '', channel), 'store_id': store_id}
+                'elevation': 0., 'codes': ('cz', 'vac', '', channel), 'store_id': store_id}
+                #'elevation': 0., 'codes': ('cz', 'nkc', '', channel), 'store_id': store_id}
             targets = [Target(lat=lat, lon=lon, **target_kwargs)]
             sources = []
             for d in distances:
@@ -1166,10 +1166,12 @@ def dbtest(noise_level=0.00000005):
                     strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                              dipmin, dipmax,
                                                                              rakemin, rakemax)
-                    mt = moment_tensor.MomentTensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
-                    e = model.Event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
+                    mt = moment_tensor.momenttensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
+                    e = model.event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
                     if use_extended_sources is True:
-                        sources.append(e2extendeds(e, north_shift=float(d),
+                        #sources.append(e2extendeds(e, north_shift=float(d),
+                        print 'use line source!'
+                        sources.append(e2linesource(e, north_shift=float(d),
                                                east_shift=float(d),
                                                nucleation_radius=nucleation_radius,
                                                stf_type=stf_type))
@@ -1177,9 +1179,9 @@ def dbtest(noise_level=0.00000005):
                         sources.append(e2s(e, north_shift=float(d),
                                            east_shift=float(d),
                                            stf_type=stf_type))
-                fig, ax = Animator.get_3d_ax()
-            Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-            Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
+                fig, ax = animator.get_3d_ax()
+            animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
+            animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
             #plt.show()
 
         elif use_real_shit is True:
@@ -1191,11 +1193,11 @@ def dbtest(noise_level=0.00000005):
                 strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                          dipmin, dipmax,
                                                                          rakemin, rakemax)
-                mt = moment_tensor.MomentTensor(
+                mt = moment_tensor.momenttensor(
                     strike=strike, dip=dip, rake=rake, magnitude=e.magnitude)
                 #mt.magnitude = e.magnitude
                 e.moment_tensor = mt
-            if use_extended_sources is True:
+            if use_extended_sources is true:
                 sources = [e2extendeds(
                     e, nucleation_radius=nucleation_radius, stf_type=stf_type)
                            for e in events]
@@ -1211,7 +1213,7 @@ def dbtest(noise_level=0.00000005):
             #    #s.rake = rake
         if use_responses:
             associate_responses(
-                glob.glob('responses/RESP*'),
+                glob.glob('responses/resp*'),
                 targets,
                 time=util.str_to_time('2012-01-01 00:00:00.'))
         #associate_responses(glob.glob('responses/*pz'),
@@ -1223,13 +1225,13 @@ def dbtest(noise_level=0.00000005):
         logger.info('number of sources: %s' % len(sources))
         logger.info('number of targets: %s' % len(targets))
         coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
-                        ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
-    #fig, ax = Animator.get_3d_ax()
-    #Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
+                        ignore_segments=true, dump_to=fn_coupler, check_relevance_by=noise_pile)
+    #fig, ax = animator.get_3d_ax()
+    #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
     pairs_by_rays = coupler.filter_pairs(4, 1200, data=coupler.filtrate, max_mag_diff=0.1)
-    animator = Animator(pairs_by_rays)
+    animator = animator(pairs_by_rays)
     #plt.show()
-    widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
+    widgets = ['plotting segments: ', progressbar.percentage(), progressbar.bar()]
     paired_sources = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, incidence_angle = p
@@ -1239,11 +1241,11 @@ def dbtest(noise_level=0.00000005):
     ax = fig.add_subplot(111)
     ax.hist(used_mags)
     paired_source_dict = paired_sources_dict(paired_sources)
-    Animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=None, alpha=1)
-    #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
+    animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=none, alpha=1)
+    #pb = progressbar.progressbar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
     #for i_r, r in enumerate(pairs_by_rays):
     #    e1, e2, t, td, pd, segments = r
-    #    Animator.plot_ray(segments, ax=ax)
+    #    animator.plot_ray(segments, ax=ax)
     #    pb.update(i_r)
     #print 'done'
     #pb.finish()
@@ -1251,15 +1253,15 @@ def dbtest(noise_level=0.00000005):
     pairs = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1 = p
-        fmin2 = None
+        fmin2 = none
         pair = []
         for sx in [s1, s2]:
             fmin1 = fmin_by_magnitude(sx.magnitude)
             #fmax = min(fmax_lim, vp/fresnel_lambda(totald, td, pd))
-            #print 'TEST ME, change channel code id to LQT'
+            #print 'test me, change channel code id to lqt'
             #t.dip = -90. + i1
             #t.azimuth = t.azibazi_to(sx)[1]
-            tracer1 = Tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
+            tracer1 = tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
                              fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
             dist1, depth1 = tracer1.get_geometry()
             if dist1< dist_min or dist1>dist_max:
@@ -1270,21 +1272,21 @@ def dbtest(noise_level=0.00000005):
             tracers.extend(pair)
             pairs.append(pair)
     if len(tracers)==0:
-        raise Exception('No tracers survived the assessment')
+        raise exception('no tracers survived the assessment')
 
-    builder = Builder()
-    tracers = builder.build(tracers, engine=engine, snuffle=False)
-    colors = UniqueColor(tracers=tracers)
+    builder = builder()
+    tracers = builder.build(tracers, engine=engine, snuffle=false)
+    colors = uniquecolor(tracers=tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
     #plt.show()
     testcouples = []
-    widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
-    pb = progressbar.ProgressBar(maxval=len(pairs)-1, widgets=widgets).start()
+    widgets = ['processing couples: ', progressbar.percentage(), progressbar.bar()]
+    pb = progressbar.progressbar(maxval=len(pairs)-1, widgets=widgets).start()
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
-        testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+        testcouple = syntheticcouple(master_slave=pair, method=method, use_common=use_common)
         testcouple.process(noise=noise)
         if len(testcouple.spectra.spectra)!=2:
             logger.warn('not 2 spectra in test couple!!!! why?')
@@ -1294,11 +1296,11 @@ def dbtest(noise_level=0.00000005):
     pb.finish()
     #outfn = 'testimage'
     #plt.gcf().savefig('output/%s.png' % outfn)
-    inverter = QInverter(couples=testcouples)
+    inverter = qinverter(couples=testcouples)
     inverter.invert()
     for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
         fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
-        testcouple.plot(infos=infos, colors=colors, noisy_Q=False, savefig=fn)
+        testcouple.plot(infos=infos, colors=colors, noisy_q=false, savefig=fn)
     inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
     fig = plt.gcf()
     plt.tight_layout()
@@ -1605,6 +1607,32 @@ def apply_webnet():
     #couples = inverter.couples
     analyze(inverter.couples)
 
+
+
+def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
+    if e.moment_tensor:
+        mt = e.moment_tensor
+        mag = mt.magnitude
+        s, d, r = mt.both_strike_dip_rake()[0]
+    else:
+        mt = False
+        mag = e.magnitude
+        s, d, r = None, None, None
+
+    #a = source_radius([mag])
+    #d = num.sqrt(a[0])
+    velocity = 3500.
+    if stf_type=='brunes':
+        brunes = Brune(sigma=2.9E6, mu=3E10, beta=velocity)
+    else:
+        brunes = None
+
+    stf = get_stf(mag, type=stf_type)
+    return LineSource(
+       lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
+       east_shift=east_shift, time=e.time, i_sources=10,
+       strike=s, dip=d, rake=r, magnitude=mag, brunes=brunes,
+        velocity=velocity, stf=stf)
 
 def analyze(couples):
     # by meanmag
