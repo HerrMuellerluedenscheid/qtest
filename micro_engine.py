@@ -10,10 +10,10 @@ from pyrocko import io
 from pyrocko import util
 from pyrocko import pz
 from pyrocko.cake import m2d
-from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource, CircularSource, OutOfBounds
+from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource, OutOfBounds
 from pyrocko.gf.store import Store
 from pyrocko.parimap import parimap
-from pyrocko.guts import Float
+from pyrocko.guts import Float, Int
 from autogain.autogain import PhasePie, PickPie
 import time
 import argparse
@@ -596,6 +596,37 @@ class Chopper():
         except AttributeError:
             return self.phase_pie.arrival(self.startphasestr, (s, t))
 
+
+class LineSource(DCSource):
+    discretized_source_class = meta.DiscretizedMTSource
+    i_sources = Int.T()
+    velocity = Float.T()
+
+    def base_key(self):
+        return DCSource.base_key(self)+(self.length, velocity)
+
+    def discretize_basesource(self, store):
+        points = num.zeros(20)
+
+        c = store.config
+        dz = c.source_depth_delta
+
+        #i_sources sollte eher i_sources/2. sein!
+        points = num.arange(-dz*i_sources, dz*i_sources, dz)
+        print 'line_source_points ', points
+
+        times = num.ones(len(points)) * (points[-1]-points[0])/self.velocity
+
+        m6s = num.ones(len(points))
+        ds = meta.DiscretizedMTSource(
+            lat=self.lat,
+            lon=self.lon,
+            times=times,
+            north_shifts=self.north_shift + north_shifts,
+            east_shifts=self.east_shift,
+            depths=self.depth,
+            m6s=m6s)
+        return ds
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
