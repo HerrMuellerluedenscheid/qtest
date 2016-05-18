@@ -1,4 +1,5 @@
 import numpy as num
+from scipy.interpolate import griddata
 import multiprocessing
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -14,6 +15,9 @@ import progressbar
 import logging
 import sys
 logger = logging.getLogger()
+
+
+cmap = plt.cm.bone_r
 
 
 class UniqueColor():
@@ -419,21 +423,23 @@ def fresnel_lambda(total_length, td, pd):
     lda = pd**2*total_length/(td*d2)
     return lda
 
+
+def scatter(X, Y, Z, ax=None):
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+    ax.scatter(X, Y, s=Z/num.max(Z)*50)
+    return ax
+
+
 def hitcount_map(hit_counter, stations, events=None, save_to='hitcount_map.png'):
     #data = num.zeros(len(hit_counter)*3).reshape(-1, 3)
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
     X, Y, Z = xyz_from_hitcount(hit_counter)
-    ax.scatter(X, Y, s=Z/num.max(Z)*50)
-
+    ax = scatter(X, Y, Z)
     #check eins zwo
     #ax.set_xlim((min(X), max(X)))
     #ax.set_ylim((min(Y), max(Y)))
-
-    for x, y, label in xyz_from_stations(stations):
-        ax.plot(x, y, 'g^')
-        ax.text(x, y, label,
-                bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
+    plot_stations(stations, ax=ax)
 
     if events is not None:
         for e in events:
@@ -445,7 +451,6 @@ def hitcount_map(hit_counter, stations, events=None, save_to='hitcount_map.png')
     ax.set_ylabel('latitude [$^\circ$]')
     fig.savefig('hitcount_map.png', dpi=200)
     plt.tight_layout()
-    plt.show()
 
 
 
@@ -474,23 +479,46 @@ def make_station_grid(stations, num_n=20, num_e=20, edge_stretch=1.):
     return stations
 
 
-def plot_stations(stations):
+def plot_stations(stations, ax=None):
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+    for x, y, label in xyz_from_stations(webnet_stations):
+        ax.plot(x, y, 'g^')
+        ax.text(x, y, label,
+                bbox={'facecolor':'white', 'alpha':0.5, 'pad':0.1, 'edgecolor':'white'})
+    #for s in stations:
+    #    ax.plot(s.lon, s.lat, 'to')
+    return ax
+
+def load_and_show(fn):
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    for s in stations:
-        ax.plot(s.lon, s.lat, 'bo')
-    plt.tight_layout()
-    plt.show()
-
-
+    X, Y, Z = num.loadtxt(fn).T
+    grid_x, grid_y = num.mgrid[min(X):max(X):100j, min(Y):max(Y):100j]
+    grid = griddata((X, Y), Z, (grid_x, grid_y), method='cubic')
+    ax.contourf(grid_x,grid_y, grid, cmap=cmap, levels=num.linspace(num.nanmin(grid), num.nanmax(grid), 30))
+    ax = scatter(X, Y, Z, ax=ax)
 
 if __name__=='__main__':
+    year = 2008
+    webnet_stations = model.load_stations('/data/meta/stations.pf')
+
+
+    if True:
+        print 'loading'
+        load_and_show('hitcount_%s.txt' %year)
+        plot_stations(webnet_stations, ax=plt.gca())
+        plt.gcf().savefig('hitcount_map_%s.png' % year)
+        plt.show()
+        sys.exit(1)
+
+
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
     #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
     #webnet_stations = model.load_stations('/data/meta/stations.pf')
     ##hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
     #stations = make_station_grid(webnet_stations, num_n=1, num_e=1, edge_stretch=0.15)
-    #plot_stations(stations)
     #colormap = UniqueColor(tracers=stations)
     #phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
     #earthmodel = cake.load_model('../earthmodel_malek_alexandrakis.nd')
@@ -509,26 +537,21 @@ if __name__=='__main__':
     # here goes the later calculated full extension of the seismogenic zone
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
 
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    #events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/reloc_new/%s_reloc.pf' %year))
     #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    webnet_stations = model.load_stations('/data/meta/stations.pf')
     #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
     #print 'exiting.....'
     #stations = make_station_grid(webnet_stations, num_n=5, num_e=4, edge_stretch=0.2)
     stations = make_station_grid(webnet_stations, num_n=20, num_e=20, edge_stretch=1.0)
-    #stations = webnet_stations
     plot_stations(stations)
-    colormap = UniqueColor(tracers=stations)
-    phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
+    #colormap = UniqueColor(tracers=stations)
+    #phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
     earthmodel = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
 
     # sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
     center = array_center(events)
-    #fig, ax = get_3d_ax()
-    all_results = []
-    results = []
-    #pool = multiprocessing.Pool()
-    nevents = 120
+    nevents = 80
     #nevents = 15
     coupler = Coupler()
     from q import s2t, e2s
@@ -539,7 +562,15 @@ if __name__=='__main__':
                     phases=None, ignore_segments=True)
     filtered = coupler.filter_pairs(4., 1000., data=coupler.filtrate)
     hitcount = stats_by_station(filtered)
-    hitcount_map(hitcount, webnet_stations, events)
+    #hitcount_map(hitcount, webnet_stations, events)
+    # save:
+    X, Y, Z = xyz_from_hitcount(hitcount)
+    num.savetxt('hitcount_%s.txt' % year, num.column_stack((X, Y, Z)))
+    ax = scatter(X, Y, Z)
+    grid_x, grid_y = num.mgrid[min(X):max(X):100j, min(Y):max(Y):100j]
+    grid = griddata((X, Y), Z, (grid_x, grid_y), method='cubic')
+    ax.imshow(grid.T)
+
     #hitcount_map(filtered, webnet_stations)
     plt.show()
     sys.exit(0)
@@ -552,7 +583,7 @@ if __name__=='__main__':
     ax = fig.add_subplot(212)
     ax.hist(depths, bins=30)
     ax.set_title('source depths')
-    fig.savefig('epi_dists_depths_pairs.png')
+    fig.savefig('epi_dists_depths_pairs_newdd2008.png')
     #hitcount_pie(hitcount, colormap)
-    hitcount_map(hitcount, webnet_stations)
+    #hitcount_map(hitcount, webnet_stations, events)
     plt.show()
