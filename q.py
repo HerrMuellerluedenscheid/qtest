@@ -5,8 +5,9 @@ mpl.rc('xtick', labelsize=10)
 
 import copy
 import progressbar
-from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine, SourceWithMagnitude, OutOfBounds
-from pyrocko.guts import String
+from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
+from pyrocko.gf import SourceWithMagnitude, OutOfBounds#, CircularSource
+from pyrocko.guts import String, Float, Int
 from pyrocko import orthodrome
 from pyrocko.gui_util import PhaseMarker
 from pyrocko import util
@@ -187,6 +188,7 @@ def extract(fxfy, upper_lim=0., lower_lim=99999.):
 def get_stf(magnitude=0, stress=0.1, vr=2750., type=None):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
     duration = M02tr(Mo, stress, vr)
+    print 'CHECK THE DURATION: %s' % duration
     if type==None:
         stf = None
     elif type=='boxcar':
@@ -209,6 +211,13 @@ class RectangularBrunesSource(RectangularSource):
         #self.stf = get_stf(self.magnitude)
         #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
 
+#class CircularBrunesSource(CircularSource):
+#    brunes = Brune.T(optional=True, default=None)
+#    def __init__(self, **kwargs):
+#        CircularSource.__init__(self, **kwargs)
+#        #self.stf = get_stf(self.magnitude)
+#        #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+
 
 class DCSourceWid(DCSource):
     id = String.T(optional=True, default=None)
@@ -217,6 +226,43 @@ class DCSourceWid(DCSource):
         DCSource.__init__(self, **kwargs)
         #self.stf = get_stf(self.magnitude)
         #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+
+
+class LineSource(DCSource):
+    discretized_source_class = meta.DiscretizedMTSource
+    i_sources = Int.T()
+    velocity = Float.T()
+    brunes = Brune.T(optional=True, default=None)
+
+    def base_key(self):
+        return DCSource.base_key(self)+(self.i_sources, self.velocity)
+
+    def discretize_basesource(self, store):
+
+        c = store.config
+        dz = c.source_depth_delta
+
+        #i_sources sollte eher i_sources/2. sein!
+        north_shifts = num.arange(-dz*self.i_sources, dz*self.i_sources, dz)
+        print 'line_source_points ', north_shifts
+
+        times = num.ones(len(north_shifts)) * (north_shifts[-1]-north_shifts[0])/self.velocity
+        n = times.size
+
+        mot = moment_tensor.MomentTensor(strike=self.strike, dip=self.dip, rake=self.rake,
+                                                            scalar_moment=1.0/n)
+        amplitudes = num.ones(n)/n
+        m6s = num.repeat(mot.m6()[num.newaxis, :], n, axis=0)
+        m6s[:, :] *= amplitudes[:, num.newaxis]
+        ds = meta.DiscretizedMTSource(
+            lat=self.lat,
+            lon=self.lon,
+            times=times,
+            north_shifts=self.north_shift + north_shifts,
+            east_shifts=self.east_shift,
+            depths=self.depth,
+            m6s=m6s)
+        return ds
 
 
 def exp_fit(x, y, m):
@@ -294,7 +340,7 @@ def spectralize(tr, method='mtspec', chopper=None, tinc=None):
     elif method=='mtspec':
         tr = tr.copy()
         #_tr.set_network('C')
-        tr.taper(_taperer, inplace=True, chop=False)
+        #tr.taper(_taperer, inplace=True, chop=False)
 
         #pad_length = (_tr.tmax - _tr.tmin) * 0.5
         #_tr.extend(_tr.tmin-pad_length, _tr.tmax+pad_length)
@@ -306,11 +352,11 @@ def spectralize(tr, method='mtspec', chopper=None, tinc=None):
         tr.set_ydata(ydata/num.max(num.abs(ydata)))
         a, f = mtspec(data=tr.ydata,
                       delta=tr.deltat,
-                      number_of_tapers=5,
+                      number_of_tapers=10,
                       #number_of_tapers=12,
                       #number_of_tapers=2,
                       #time_bandwidth=7.5,
-                      time_bandwidth=3.5,
+                      time_bandwidth=4.,
                       nfft=nextpow2(len(tr.get_ydata())),
                       quadratic=True,
                       statistics=False)
@@ -435,9 +481,9 @@ class SyntheticCouple():
         length = -1
         for i, tracer in enumerate(self.master_slave):
             tr = tracer.process(**pp_kwargs)
-            if tr is None or isinstance(tr, OutOfBounds):
+            if tr is False or isinstance(tr, str):
                 self.spectra.spectra.append((tracer, tr))
-                self.good = False
+                self.good = tr
                 continue
 
             if length<(tr.tmax-tr.tmin):
@@ -449,14 +495,6 @@ class SyntheticCouple():
             f, a = self.get_spectrum(tr, tracer, length)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
-
-        #for i in xrange(self.repeat):
-        #    #tr = tracer.process(**pp_kwargs).copy()
-        #    tr = tracer.process(**pp_kwargs)
-        #    tr_noise = add_noise(tr, level=self.noise_level)
-        #    f, a = self.get_spectrum(tr_noise, tracer)
-        #    fxfy = num.vstack((f,a))
-        #    self.noisy_spectra.spectra.append((tracer, fxfy))
 
     def get_spectrum(self, tr, tracer, wantlength):
         length = tr.tmax - tr.tmin
@@ -472,7 +510,7 @@ class SyntheticCouple():
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
             Q = self.invert_data[-1]
-            ax.text(0.01, 0.01, "Q=%1.1f" % Q,
+            ax.text(0.01, 0.01, "1/Q=%1.6f" % Q,
                     verticalalignment='bottom',
                     horizontalalignment='left',
                     transform=ax.transAxes)
@@ -577,6 +615,14 @@ class SyntheticCouple():
         d2 = ms[1].target.distance_to(ms[1].source)
         return d1, d2, ms[0].source.depth, ms[1].source.depth
 
+    def __str__(self):
+        s = 'master: %s\n slave: %s\n good: %s\n' % (
+                                                    self.master_slave[0],
+                                                    self.master_slave[1],
+                                                    str(self.good))
+        return s
+
+
 def limited_frequencies_ind(fmin, fmax, f):
     return num.where(num.logical_and(f>=fmin, f<=fmax))
 
@@ -598,28 +644,6 @@ def noisy_spectral_ratios(pairs):
         ratios.append(fy_ratio)
         indxs.append(one[i][0][ind0])
     return indxs, ratios
-
-
-def spectral_ratio_old(couple):
-    '''Ratio of two overlapping spectra'''
-    assert len(couple.spectra.spectra)==2
-    fx = []
-    fy = []
-    cfmin = max([couple.spectra.spectra[1][0].fmin, couple.spectra.spectra[0][0].fmin])
-    cfmax = min([couple.spectra.spectra[1][0].fmax, couple.spectra.spectra[0][0].fmax])
-
-    for tr, fxfy in couple.spectra.spectra:
-        fs, a = fxfy
-        fx.append(fxfy[0])
-        fy.append(fxfy[1])
-
-    ind0 = limited_frequencies_ind(cfmin, cfmax, fx[0])
-    ind1 = limited_frequencies_ind(cfmin, cfmax, fx[1])
-    assert all(fx[0][ind0]==fx[1][ind1])
-    fy_ratio = fy[0][ind0]/fy[1][ind1]
-    #return fx[0][ind0], fy_ratio
-    slope, interc, r, p, std = linregress(fx[0][ind0], fy_ratio)
-    return interc, slope, fx[0][ind0]
 
 
 def spectral_ratio(couple):
@@ -709,11 +733,11 @@ class QInverter:
         pb = progressbar.ProgressBar(maxval=len(self.couples), widgets=widgets).start()
         for i_c, couple in enumerate(self.couples):
             cc_coef = couple.cc_coef()
-            #if cc_coef< self.cc_min:
-            #    logger.info('lower than cc threshold. skip')
-            #    continue
-            #else:
-            #    logger.info('higher than cc threshold. ')
+            if cc_coef< self.cc_min:
+                logger.info('lower than cc threshold. skip')
+                continue
+            else:
+                logger.info('higher than cc threshold. ')
             pb.update(i_c+1)
             interc, slope, fx = spectral_ratio(couple)
             dt = couple.delta_onset()
@@ -721,8 +745,8 @@ class QInverter:
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
-            couple.invert_data = (dt, fx, slope, interc, Q)
-            self.allqs.append(Q)
+            couple.invert_data = (dt, fx, slope, interc, 1./Q)
+            self.allqs.append(1./Q)
         pb.finish()
 
     def plot(self, ax=None, q_threshold=None, relative_to=None, want_q=False):
@@ -743,16 +767,64 @@ class QInverter:
         ax.text(0.01, 0.99, txt, size=fsize, transform=ax.transAxes, verticalalignment='top')
         ax.axvline(0, color='black', alpha=0.3)
         ax.axvline(median, color='blue')
-        if relative_to=='median':
+        if q_threshold is not None:
+            ax.set_xlim([q_threshold, q_threshold])
+        elif relative_to=='median':
             ax.set_xlim([median-q_threshold, median+q_threshold])
         elif relative_to=='mean':
             ax.set_xlim([mean-q_threshold, mean+q_threshold])
-        else:
-            ax.set_xlim([q_threshold, q_threshold])
 
         if want_q:
             ax.axvline(want_q, color='r')
         return
+
+    def analyze(self, couples=None):
+        # by meanmag
+        Qs = []
+        mags = []
+        magdiffs = []
+        by_target = {}
+        cc = []
+        for c in self.couples:
+            if c.invert_data is None:
+                continue
+            Q = c.invert_data[-1]
+            Qs.append(Q)
+            cc.append(c.cc_coef())
+            meanmag = (c.master_slave[0].source.magnitude+c.master_slave[1].source.magnitude)/2.
+            mags.append(meanmag)
+
+            magdiff = abs(c.master_slave[0].source.magnitude-c.master_slave[1].source.magnitude)
+            magdiffs.append(magdiff)
+            try:
+                by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ].append(Q)
+            except KeyError:
+                by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ] = [Q]
+        fig = plt.figure()
+        ax = fig.add_subplot(2, 2, 1)
+        ax.set_title('cc coef vs Q')
+        ax.plot(cc, Qs, 'bo')
+
+        ax = fig.add_subplot(2, 2, 2)
+        ax.plot(mags, Qs, 'bo')
+        ax.set_title('mean magnitude vs Q')
+
+        ax = fig.add_subplot(2, 2, 3)
+        ax.plot(magdiffs, Qs, 'bo')
+        ax.set_title('magnitude difference vs Q')
+
+        nrow = 3
+        ncolumns = int(len(by_target)/nrow)+1
+        fig = plt.figure()
+        i = 0
+        q_threshold = 2000
+        for k, v in by_target.items():
+            if len(v)<3:
+                continue
+            ax = fig.add_subplot(nrow, ncolumns, i)
+            ax.hist(filter(lambda x: x<=q_threshold, v), bins=20)
+            ax.set_title(k)
+            i += 1
 
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
@@ -984,13 +1056,13 @@ def wanted_q(mod, z):
 
 
 
-def dbtest(noise_level=0.00000005):
+def dbtest(noise_level=0.0000000000005):
     print '-------------------db test-------------------------------'
-    use_real_shit = False
-    use_extended_sources = True
+    use_real_shit = True
+    use_extended_sources = False
     use_responses = True                            # 2 test
-    load_coupler = False
-    test_scenario = False
+    load_coupler = True
+    test_scenario = True
     #want_station = ('cz', 'nkc', '')
     #want_station = ('cz', 'kac', '')
     want_station = 'all'
@@ -999,48 +1071,37 @@ def dbtest(noise_level=0.00000005):
     sources = []
     method = 'mtspec'
     #method = 'sine_psd'
-    min_magnitude = 0.1
+    min_magnitude = 2.
     max_magnitude = 6.
     fminrange = 20.
     #use_common = False
     use_common = True
     fmax_lim = 80.
+    #zmax = 10700
     fmin = 31.
-    fmin = magnitude2fmin.setup(lim=fmin)
+    fmin = Magnitude2fmin.setup(lim=fmin)
     fmax = 90.
-    #window_by_magnitude = magnitude2window.setup(0.3, 4.)
-    window_by_magnitude = magnitude2window.setup(0.2, 4.)
-    #store_id = 'qplayground_invtest7'
-    #store_id = 'qplayground_30000m_2'
-    #store_id = 'qplayground_30000m_waveform_sampling5'
-    #store_id = 'qplayground_30000m_simple3'
-    #store_id = 'qplayground_30000m_continuous2'
-    #store_id = 'qplayground_10000m_continuous2'
-    #store_id = 'qplayground_10000m_continuous2_q25'
-    #store_id = 'qplayground_10000m_continuous2_q800'
-    #store_id = 'qplayground_10000m_continuous2_noflatearth'
+    window_by_magnitude = Magnitude2Window.setup(0.2, 0.02)
+    quantity = 'displacement'
     #store_id = 'qplayground_total_2'
     #store_id = 'qplayground_total_2_q25'
     #store_id = 'qplayground_total_2_q400'
-    #store_id = 'qplayground_total_1_q400'
-    store_id = 'qplayground_total_4_hr'
-    #store_id = 'qplayground_total_4_mr_full'
+    #store_id = 'qplayground_total_1_hr'
+    #store_id = 'qplayground_total_4_hr'
+    #store_id = 'qplayground_total_4_hr_full'
+    store_id = 'ahfullgreen_3'
 
     # setting the dc components:
+
     strikemin = 160
     strikemax = 180
     dipmin = -60
     dipmax = -80
     rakemin = 20
     rakemax = 40
-    #strikemin = 170
-    #strikemax = 170
-    #dipmin = -70
-    #dipmax = -70
-    #rakemin = 30
-    #rakemax = 30
 
-    engine = localengine(store_superdirs=['/data/stores', '/media/usb/stores'])
+    engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
+    #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
     store = engine.get_store(store_id)
     config = engine.get_store_config(store_id)
     mod = config.earthmodel_1d
@@ -1050,47 +1111,43 @@ def dbtest(noise_level=0.00000005):
     zmax = config.source_depth_max - gf_padding
     dist_min = config.distance_min
     dist_max = config.distance_max
-    #plot_model(mod, parameters=['vp', 'qp'])
-    #fig = plt.gcf()
-    #fig.savefig('hist_db%s_model.png' %store_id, dpi=200)
     channel = 'SHZ'
     tt_mu = 0.
     tt_sigma = 0.0001
-    save_figs = true
+    save_figs = True
     nucleation_radius = 0.1
-    #nucleation_radius = none
-    #nucleation_radius = 'bothlefttoright'
 
     # distances used if not real sources:
     if test_scenario:
-        distances = num.linspace(config.distance_min+gf_padding, config.distance_max-gf_padding, 10)
-        source_depths = num.linspace(zmin, zmax, 10)
+        distances = num.linspace(config.distance_min+gf_padding, config.distance_max-gf_padding, 12)
+        source_depths = num.linspace(zmin, zmax, 12)
     else:
         distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 200)
         source_depths = num.arange(zmin, zmax, 200)
 
-    perturbation = uniformttperturbation(mu=tt_mu, sigma=tt_sigma)
+    perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
     perturbation.plot()
-    p_chopper = chopper('first(p)', phase_position=0.4,
+    p_chopper = Chopper('first(p)', phase_position=0.3,
                         by_magnitude=window_by_magnitude,
-                        phaser=phasepie(mod=mod))
+                        phaser=PhasePie(mod=mod))
     stf_type = 'brunes'
     #stf_type = 'halfsin'
-    #stf_type = none
+    #stf_type =  None
     tracers = []
     want_phase = 'p'
     fn_coupler = 'dummy_coupling.yaml'
-    #fn_coupler = none
+    #fn_coupler = None
     fn_noise = '/media/usb/webnet/mseed/noise.mseed'
     fn_records = '/media/usb/webnet/mseed'
-    if use_real_shit:
-        noise = noise(files=fn_noise, scale=noise_level)
+    #if use_real_shit:
+    if False:
+        noise = Noise(files=fn_noise, scale=noise_level)
         noise_pile = pile.make_pile(fn_records)
     else:
-        noise = randomnoiseconstantlevel(noise_level)
-        noise_pile = none
+        noise = RandomNoiseConstantLevel(noise_level)
+        noise_pile = None
 
-    events = list(model.event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
     all_depths = [e.depth for e in events]
     some_depths = [d/1000. for d in all_depths if d>8500]
     fig = plt.figure(figsize=(6,8))
@@ -1100,7 +1157,7 @@ def dbtest(noise_level=0.00000005):
     ax.invert_yaxis()
     ax.set_ylim(0, 12.)
     plot_model(mod, ax=ax, parameters=['qp'])
-    #ax.axes.get_yaxis().set_visible(false)
+    #ax.axes.get_yaxis().set_visible(False)
     ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
 
     #ax = fig.add_subplot(1, 3, 1, sharey=ax)
@@ -1109,14 +1166,14 @@ def dbtest(noise_level=0.00000005):
     #ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
     #ax.set_ylim(0, 12.)
     ##ax.set_ylim(0, 12000.)
-    #ax.axes.get_yaxis().set_visible(true)
+    #ax.axes.get_yaxis().set_visible(True)
 
     ax = fig.add_subplot(1, 2, 2, sharey=ax)
     ax.set_title('source depths')
     ax.hist(some_depths, bins=17, orientation='horizontal')
     ax.set_xlabel('count')
     ax.set_ylim(0, 12.)
-    ax.axes.get_yaxis().set_visible(false)
+    ax.axes.get_yaxis().set_visible(False)
     #ax.yaxis.tick_right()
     ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
     #ax.set_ylim(0, 12000)
@@ -1126,10 +1183,6 @@ def dbtest(noise_level=0.00000005):
     #plt.tight_layout()
     ax.invert_yaxis()
     fig.savefig('model_event_depths.png')
-    #plt.gca().invert_yaxis()
-    #plt.grid()
-    plt.show()
-
 
     average_depth = num.mean(all_depths)
     want_q = wanted_q(mod, average_depth)
@@ -1144,12 +1197,12 @@ def dbtest(noise_level=0.00000005):
 
     if load_coupler:
         print 'load coupler'
-        filtrate = filtrate.load(filename=fn_coupler)
+        filtrate = Filtrate.load(filename=fn_coupler)
         sources = filtrate.sources
-        coupler = coupler(filtrate)
+        coupler = Coupler(filtrate)
         print 'done'
     else:
-        coupler = coupler()
+        coupler = Coupler()
         if use_real_shit is False:
             target_kwargs = {
                 #'elevation': 0., 'codes': ('cz', 'kvc', '', channel), 'store_id': store_id}
@@ -1166,12 +1219,12 @@ def dbtest(noise_level=0.00000005):
                     strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                              dipmin, dipmax,
                                                                              rakemin, rakemax)
-                    mt = moment_tensor.momenttensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
-                    e = model.event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
+                    mt = moment_tensor.MomentTensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
+                    e = model.Event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
                     if use_extended_sources is True:
-                        #sources.append(e2extendeds(e, north_shift=float(d),
-                        print 'use line source!'
-                        sources.append(e2linesource(e, north_shift=float(d),
+                        sources.append(e2extendeds(e, north_shift=float(d),
+                        #print 'use line source!'
+                        #sources.append(e2linesource(e, north_shift=float(d),
                                                east_shift=float(d),
                                                nucleation_radius=nucleation_radius,
                                                stf_type=stf_type))
@@ -1179,25 +1232,25 @@ def dbtest(noise_level=0.00000005):
                         sources.append(e2s(e, north_shift=float(d),
                                            east_shift=float(d),
                                            stf_type=stf_type))
-                fig, ax = animator.get_3d_ax()
-            animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-            animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
-            #plt.show()
+            fig, ax = Animator.get_3d_ax()
+            Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
+            Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
 
         elif use_real_shit is True:
             targets = [s2t(s, channel, store_id=store_id) for s in stations]
             events = filter(lambda x: x.depth>zmin and x.depth<zmax, events)
             events = filter(lambda x: x.magnitude>=min_magnitude, events)
             events = filter(lambda x: x.magnitude<=max_magnitude, events)
+            events = filter(lambda x: x.depth<=zmax, events)
             for e in events:
                 strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                          dipmin, dipmax,
                                                                          rakemin, rakemax)
-                mt = moment_tensor.momenttensor(
+                mt = moment_tensor.MomentTensor(
                     strike=strike, dip=dip, rake=rake, magnitude=e.magnitude)
                 #mt.magnitude = e.magnitude
                 e.moment_tensor = mt
-            if use_extended_sources is true:
+            if use_extended_sources is True:
                 sources = [e2extendeds(
                     e, nucleation_radius=nucleation_radius, stf_type=stf_type)
                            for e in events]
@@ -1225,13 +1278,13 @@ def dbtest(noise_level=0.00000005):
         logger.info('number of sources: %s' % len(sources))
         logger.info('number of targets: %s' % len(targets))
         coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
-                        ignore_segments=true, dump_to=fn_coupler, check_relevance_by=noise_pile)
+                        ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
     #fig, ax = animator.get_3d_ax()
     #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
     pairs_by_rays = coupler.filter_pairs(4, 1200, data=coupler.filtrate, max_mag_diff=0.1)
-    animator = animator(pairs_by_rays)
+    animator = Animator(pairs_by_rays)
     #plt.show()
-    widgets = ['plotting segments: ', progressbar.percentage(), progressbar.bar()]
+    widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
     paired_sources = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, incidence_angle = p
@@ -1241,7 +1294,7 @@ def dbtest(noise_level=0.00000005):
     ax = fig.add_subplot(111)
     ax.hist(used_mags)
     paired_source_dict = paired_sources_dict(paired_sources)
-    animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=none, alpha=1)
+    animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=None, alpha=1)
     #pb = progressbar.progressbar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
     #for i_r, r in enumerate(pairs_by_rays):
     #    e1, e2, t, td, pd, segments = r
@@ -1253,7 +1306,7 @@ def dbtest(noise_level=0.00000005):
     pairs = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1 = p
-        fmin2 = none
+        fmin2 = None
         pair = []
         for sx in [s1, s2]:
             fmin1 = fmin_by_magnitude(sx.magnitude)
@@ -1261,8 +1314,10 @@ def dbtest(noise_level=0.00000005):
             #print 'test me, change channel code id to lqt'
             #t.dip = -90. + i1
             #t.azimuth = t.azibazi_to(sx)[1]
-            tracer1 = tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
-                             fmax=fmax, want='velocity', perturbation=perturbation.perturb(0))
+            tracer1 = Tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
+                             fmax=fmax, want=quantity,
+                             perturbation=perturbation.perturb(0))
+
             dist1, depth1 = tracer1.get_geometry()
             if dist1< dist_min or dist1>dist_max:
                 break
@@ -1274,39 +1329,39 @@ def dbtest(noise_level=0.00000005):
     if len(tracers)==0:
         raise exception('no tracers survived the assessment')
 
-    builder = builder()
-    tracers = builder.build(tracers, engine=engine, snuffle=false)
-    colors = uniquecolor(tracers=tracers)
+    builder = Builder()
+    tracers = builder.build(tracers, engine=engine, snuffle=False)
+    colors = UniqueColor(tracers=tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
     #plt.show()
     testcouples = []
-    widgets = ['processing couples: ', progressbar.percentage(), progressbar.bar()]
-    pb = progressbar.progressbar(maxval=len(pairs)-1, widgets=widgets).start()
+    widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
+    pb = progressbar.ProgressBar(len(pairs)-1, widgets=widgets).start()
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
-        testcouple = syntheticcouple(master_slave=pair, method=method, use_common=use_common)
+        testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
         testcouple.process(noise=noise)
         if len(testcouple.spectra.spectra)!=2:
             logger.warn('not 2 spectra in test couple!!!! why?')
             continue
         testcouples.append(testcouple)
-    testcouples = filter(lambda x: x.good, testcouples)
     pb.finish()
+    testcouples = filter(lambda x: x.good==True, testcouples)
     #outfn = 'testimage'
     #plt.gcf().savefig('output/%s.png' % outfn)
-    inverter = qinverter(couples=testcouples)
+    inverter = QInverter(couples=testcouples)
     inverter.invert()
     for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
         fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
-        testcouple.plot(infos=infos, colors=colors, noisy_q=false, savefig=fn)
+        testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
     inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
     fig = plt.gcf()
     plt.tight_layout()
     fig.savefig('synthetic_tests/%s/hist_db%s.png' %(want_phase, store_id), dpi=200)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    analyze(inverter.couples)
+    inverter.analyze()
     plt.show()
 
 
@@ -1331,25 +1386,13 @@ def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
         s, d, r = None, None, None
 
     a = source_radius([mag])
-    #d = num.sqrt(a[0])
-    print 'magnitude: ', mag
     if nucleation_radius is not None:
         nucleation_x, nucleation_y = (num.random.random(2)-0.5)*2.*nucleation_radius
         nucleation_x = float(nucleation_x)
         nucleation_y = float(nucleation_y)
     else:
         nucleation_x, nucleation_y = None, None
-    #nucleation_x = 0.8
-    #nucleation_y = 0.8
-    print 'force radius and nucleation!'
-    a = [60.]
-    print 'source radius: ', a
-    nucleation_x = 0.
-    nucleation_y = 0.
-    #velocity = 3500 + num.random.normal(scale=300)
     velocity = 3500.
-    #print velocity
-    #nucleation_y = 0.
     if stf_type=='brunes':
         # mu nachschauen!
         # beta aus Modell
@@ -1358,19 +1401,12 @@ def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
         brunes = None
 
     stf = get_stf(mag, type=stf_type)
-    print stf
-    print brunes
-    print 'nucleation: ', nucleation_x, nucleation_y
-    #print mt.strike1, mt.strike2
-    #print mt.dip1, mt.dip2
-    #print mt.rake1, mt.rake2
-    print '.'*80
     return RectangularBrunesSource(
-       lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
-       east_shift=east_shift, time=e.time, width=float(a[0]), length=float(a[0]),
-       strike=s, dip=d, rake=r, magnitude=mag, brunes=brunes,
-        velocity=velocity,
-       nucleation_x=nucleation_x, nucleation_y=nucleation_y, stf=stf)
+       lat=float(e.lat), lon=float(e.lon), depth=float(e.depth), north_shift=float(north_shift),
+       east_shift=float(east_shift), time=float(e.time), width=float(a[0]), length=float(a[0]),
+       strike=float(s), dip=float(d), rake=float(r), magnitude=float(mag), brunes=brunes,
+        velocity=float(velocity),
+       nucleation_x=float(nucleation_x), nucleation_y=float(nucleation_y), stf=stf)
     #return RectangularSource(
     #   lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
     #   east_shift=east_shift, time=e.time, width=float(a[0]), length=float(a[0]),
@@ -1403,7 +1439,7 @@ def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
 #    print mt.dip1, mt.dip2
 #    print mt.rake1, mt.rake2
 #    print '.'*80
-#    return CircularSource(
+#    return CircularBrunesSource(
 #       lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
 #       east_shift=east_shift, time=e.time, radius=float(a[0]),
 #       strike=mt.strike1, dip=mt.dip1, rake=mt.rake1, magnitude=mag,
@@ -1419,10 +1455,10 @@ def e2s(e, north_shift=0., east_shift=0., stf_type=None):
         mag = e.magnitude
 
     stf = get_stf(mag, type=stf_type)
-    velocity = 3500.
     if stf_type=='brunes':
         # mu nachschauen!
         # beta aus Modell
+        velocity = 3500.
         brunes = Brune(sigma=2.9E6, mu=3E10, beta=velocity)
     else:
         brunes = None
@@ -1449,18 +1485,18 @@ def apply_webnet():
 
     # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
     # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
-    load_coupler = True
+    load_coupler = False
     builder = Builder()
     #method = 'sine_psd'
     method = 'mtspec'
     use_common = True
-    fmax = 89
-    fminrange = 20
+    fmax = 110
+    fminrange = 30
 
     vp = 6000.
     fmin_by_magnitude = Magnitude2fmin.setup(lim=30)
-    min_magnitude = 1.1
-    max_magnitude = 1.8
+    min_magnitude = 0.3
+    max_magnitude = 4.
     #min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
@@ -1470,15 +1506,15 @@ def apply_webnet():
     print len(events)
     #events = num.random.choice(events, num_use_events)
     events = filter(lambda x: x.magnitude>= min_magnitude, events)
-    events = filter(lambda x: x.magnitude<= min_magnitude, events)
+    events = filter(lambda x: x.magnitude<= max_magnitude, events)
     print '%s events'% len(events)
     reset_events(markers, events)
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
     want_phase = 'P'
     #window_length = {'S': 0.4, 'P': 0.4}
-    #window_by_magnitude = Magnitude2Window.setup(0.05, 2.8)
-    window_by_magnitude = Magnitude2Window.setup(0.1, 2.9)
+    window_by_magnitude = Magnitude2Window.setup(0.08, 2.8)
+    #window_by_magnitude = Magnitude2Window.setup(0.1, 2.8)
     phase_position = {'S': 0.2, 'P': 0.3}
     #window_length = {'S': 0.4, 'P': 0.4}
     #phase_position = {'S': 0.2, 'P': 0.2}
@@ -1521,7 +1557,8 @@ def apply_webnet():
 
     fig, ax = Animator.get_3d_ax()
     #print coupler.filtrate
-    pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate, ignore=ignore, max_mag_diff=0.2)
+    pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate,
+                                         ignore=ignore, max_mag_diff=0.5)
     paired_sources = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1 = p
@@ -1547,14 +1584,14 @@ def apply_webnet():
                              chopper=p_chopper, channel=channel, fmin=fmin1,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
-
+        tracer1.setup_data()
 
         fmin2 = fmin_by_magnitude(s2.magnitude)
         tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t,
                              chopper=p_chopper, channel=channel, fmin=fmin2,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
-
+        tracer2.setup_data()
         if fmax-fmin1<fminrange or fmax-fmin2<fminrange:
             continue
         else:
@@ -1571,6 +1608,7 @@ def apply_webnet():
             #pairs.append(pair)
     print 'good/bad' , goods, bads
     colors = UniqueColor(tracers=tracers)
+    tracers = builder.build(tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
@@ -1595,17 +1633,18 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.85)
+    inverter = QInverter(couples=testcouples, cc_min=0.8)
     inverter.invert()
-    for i, tc in enumerate(num.random.choice(testcouples, 10)):
+    good_results = filter(lambda x: x.invert_data is not None, testcouples)
+    for i, tc in enumerate(num.random.choice(good_results, 10)):
         fn = 'application/%s/example_%s.png' % (want_phase, str(i).zfill(2))
         tc.plot(infos=infos, colors=colors, savefig=fn)
-    inverter.plot(q_threshold=600, relative_to='median')
+    inverter.plot()#q_threshold=600, relative_to='median')
     fig = plt.gcf()
     fig.savefig('application/%s/hist_application.png' % want_phase, dpi=600)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #couples = inverter.couples
-    analyze(inverter.couples)
+    inverter.analyze()
 
 
 
@@ -1629,58 +1668,11 @@ def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_t
 
     stf = get_stf(mag, type=stf_type)
     return LineSource(
-       lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
-       east_shift=east_shift, time=e.time, i_sources=10,
-       strike=s, dip=d, rake=r, magnitude=mag, brunes=brunes,
+       lat=float(e.lat), lon=float(e.lon), depth=float(e.depth), north_shift=float(north_shift),
+       east_shift=float(east_shift), time=float(e.time), i_sources=10,
+       strike=float(s), dip=float(d), rake=float(r), magnitude=float(mag), brunes=brunes,
         velocity=velocity, stf=stf)
 
-def analyze(couples):
-    # by meanmag
-    Qs = []
-    mags = []
-    magdiffs = []
-    by_target = {}
-    cc = []
-    for c in couples:
-        if c.invert_data is None:
-            continue
-        Q = c.invert_data[-1]
-        Qs.append(Q)
-        cc.append(c.cc_coef())
-        meanmag = (c.master_slave[0].source.magnitude+c.master_slave[1].source.magnitude)/2.
-        mags.append(meanmag)
-
-        magdiff = abs(c.master_slave[0].source.magnitude-c.master_slave[1].source.magnitude)
-        magdiffs.append(magdiff)
-        try:
-            by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ].append(Q)
-        except KeyError:
-            by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ] = [Q]
-    fig = plt.figure()
-    ax = fig.add_subplot(2, 2, 1)
-    ax.set_title('cc coef vs Q')
-    ax.plot(cc, Qs, 'bo')
-
-    ax = fig.add_subplot(2, 2, 2)
-    ax.plot(mags, Qs, 'bo')
-    ax.set_title('mean magnitude vs Q')
-
-    ax = fig.add_subplot(2, 2, 3)
-    ax.plot(magdiffs, Qs, 'bo')
-    ax.set_title('magnitude difference vs Q')
-
-    nrow = 3
-    ncolumns = int(len(by_target)/nrow)+1
-    fig = plt.figure()
-    i = 0
-    q_threshold = 2000
-    for k, v in by_target.items():
-        if len(v)<3:
-            continue
-        ax = fig.add_subplot(nrow, ncolumns, i)
-        ax.hist(filter(lambda x: x<=q_threshold, v), bins=20)
-        ax.set_title(k)
-        i += 1
 
 
 if __name__=='__main__':
@@ -1691,11 +1683,15 @@ if __name__=='__main__':
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
-    dbtest()
-    #apply_webnet()
+    #dbtest()
+    apply_webnet()
     plt.show()
     #noise_test()
     #qp_model_test()
     #constant_qp_test()
     #sdr_test()
     #vp_model_test()
+
+__all__ = '''
+DCSourceWid
+'''.split()
