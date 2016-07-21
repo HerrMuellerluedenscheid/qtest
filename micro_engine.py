@@ -1,34 +1,27 @@
 import numpy as num
 import os
 import tempfile
-import glob
-from collections import defaultdict
-from pyrocko.fomosto import qseis
-from pyrocko import trace
-from pyrocko import guts
-from pyrocko import io
-from pyrocko import util
-from pyrocko import pz
-from pyrocko.cake import m2d
-from pyrocko.gf import meta, Engine, Target, DCSource, STF, Filter, RectangularSource, OutOfBounds
-from pyrocko.gf.store import Store
-from pyrocko.parimap import parimap
-from pyrocko.guts import Float, Int
-from autogain.autogain import PhasePie, PickPie
 import time
 import argparse
 import logging
-import multiprocessing
 import progressbar
-from rupture_size import radius as source_radius
 import matplotlib.pyplot as plt
-
+import glob
+from collections import defaultdict
+from pyrocko.fomosto import qseis
+from pyrocko import trace, guts, io, util, pz, orthodrome
+from pyrocko.ahfullgreen import add_seismogram, Impulse
+from pyrocko.gf import meta, Target, DCSource, Filter
+from pyrocko.gf import RectangularSource, OutOfBounds
+from pyrocko.gf.store import Store
+from pyrocko.parimap import parimap
+from autogain.autogain import PhasePie
 
 pjoin = os.path.join
 
 logger = logging.getLogger()
 diff_response = trace.DifferentiationResponse()
-
+tr_meta_init = {'noisified': False}
 
 class ResponseFilter(Filter):
     response = trace.FrequencyResponse.T()
@@ -62,22 +55,19 @@ class UniformTTPerturbation(TTPerturbation):
         return t + num.random.uniform(self.low, self.high)
 
 
-
 def associate_responses(fns, targets, time=0, type='evalresp'):
     '''
     :param instant: time for which response to be evaluated
     '''
-    if len(fns)==0:
+    if len(fns) == 0:
         logger.warn('no files found')
     for fn in fns:
-        if type=='evalresp':
+        if type == 'evalresp':
             codes = tuple(fn.split('/')[-1].split('.')[1:])
-            response = trace.Evalresp(respfile=fn,
-                                        nslc_id=codes,
-                                        #target='dis',
-                                        target='vel',
-                                        time=time)
-        if type=='polezero':
+            response = trace.Evalresp(
+                respfile=fn, nslc_id=codes, target='vel', time=time)
+
+        if type == 'polezero':
             zeros, poles, constant = pz.read_sac_zpk(fn)
             sc = fn.split('/')[-1].split('.')[:2]
             codes = ('CZ', sc[0], '', sc[1])
@@ -85,7 +75,7 @@ def associate_responses(fns, targets, time=0, type='evalresp'):
             #poles = [p/(2*num.pi) for p in poles]
             response = trace.PoleZeroResponse(poles=poles, zeros=zeros, constant=num.complex(constant))
         for t in targets:
-            if t.codes==codes:
+            if t.codes == codes:
                 t.filter = ResponseFilter(response=response)
                 logger.info('resp-file: %s <---> target: %s' %(codes, t.codes))
                 break
@@ -127,13 +117,26 @@ class Noise():
 
 
 
-class RandomNoise:
+class Noise:
     def __init__(self, level):
         self.level = level
 
-    def noisify(self, tr):
-        tr = tr.copy()
+    def noisify(self, tr, inplace=True):
+        if inplace is False:
+            tr = tr.copy()
+        if tr.meta['noisified'] == True:
+            raise Exception('Trace was already noisified')
+        tr.meta['noisified'] = True
         return self.add_noise(tr, self.level)
+
+    def add_noise(self, *args, **kwargs):
+        # to be implemented in subclass
+        pass
+
+
+class RandomNoise(Noise):
+    def __init__(self, *args, **kwargs):
+        Noise.__init__(self, *args, **kwargs)
 
     def add_noise(self, t, level):
         ydata = t.get_ydata()
@@ -144,13 +147,9 @@ class RandomNoise:
         return t
 
 
-class RandomNoiseConstantLevel:
-    def __init__(self, level):
-        self.level = level
-
-    def noisify(self, tr):
-        tr = tr.copy()
-        return self.add_noise(tr, self.level)
+class RandomNoiseConstantLevel(Noise):
+    def __init__(self, *args, **kwargs):
+        Noise.__init__(self, *args, **kwargs)
 
     def add_noise(self, t, level):
         ydata = t.get_ydata()
@@ -158,6 +157,7 @@ class RandomNoiseConstantLevel:
         ydata += noise
         t.set_ydata(ydata)
         return t
+
 
 class DDContainer():
     """ A Double Dict Container..."""
@@ -251,14 +251,12 @@ class Builder:
         logger.info('prepare or load tracers....')
         pb = progressbar.ProgressBar(maxval=len(tracers)).start()
         for i_tr, tr in enumerate(tracers):
-            if tr.setup_data():
+            if tr.setup_data(engine=engine):
                 ready.append(tr)
-            elif tr.setup_from_engine(engine):
-                ready.append(tr)
-            elif self.cache(tr, load=True):
-                ready.append(tr)
-            else:
-                need_work.append(tr)
+            #elif self.cache(tr, load=True):
+            #    ready.append(tr)
+            #else:
+            #    need_work.append(tr)
             pb.update(i_tr)
         pb.finish()
         logger.info('run %s tracers' % len(need_work))
@@ -344,7 +342,7 @@ class Tracer:
         self.incidence_angle = kwargs.get('incidence_angle', None)
         self.tinc = kwargs.pop('tinc', None)
         self.config = kwargs.pop('config', None)
-        self.traces = None
+        self.trace = None
         self.processed = False
         self.chopper = chopper
         self.kwargs = kwargs
@@ -355,30 +353,55 @@ class Tracer:
         self.fmin = kwargs.pop('fmin', -99999.)
         self.fmax = kwargs.pop('fmax', 99999.)
 
-        if self.want == 'velocity':
-            self._apply_transfer = self.differentiate
+        self._apply_transfer = self.prepare_quantity(self.want)
+
+    def prepare_quantity(self, want):
+        if want == 'velocity':
+            return self.differentiate
         elif self.want == 'displacement':
-            self._apply_transfer = _do_nothing
+            return _do_nothing
         else:
             raise Exception('unknown wanted quantity: %s' % self.want)
 
-        if not self.target.store_id and not self.kwargs.pop('no_config', False):
-            self.config.receiver_distances = [source.distance_to(target)/1000.]
-            self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
-            self.config.source_depth = source.depth/1000.
-            self.config.id+= "_%s" % (self.source.id)
-            #self.config.id = ""
-            self.config.regularize()
-
     def read_files(self, dir):
-        self.traces = io.load(dir)
+        trs = io.load(dir)
+        if len(trs) > 1:
+            self.trace = trs
+            logger.warn("new rule: one traces-one source-one target-one trace!")
+        else:
+            self.trace = trs[0]
 
-    def setup_data(self):
-        return False
+    def setup_data(self, *args, **kwargs):
+        engine = kwargs.get('engine', None)
+        self.setup_from_engine(engine)
+        if self.trace is not None:
+            #self.process()
+            return self.trace
+        else:
+            return False
+
+    def process(self, **pp_kwargs):
+
+        if isinstance(self.processed, trace.Trace):
+            # done already:
+            return self.processed
+
+        elif isinstance(self.processed, str):
+            # something went wrong before
+            return self.processed
+
+        else:
+            tr = self.trace.copy()
+            self.processed = self.chopper.chop(self.source, self.target, tr,
+                                              inplace=True)
+            if self.processed!="NoData":
+                self.processed = self.post_process(self.processed, **pp_kwargs)
+
+            return self.processed
 
     def differentiate(self, tr):
         t = tr.tmax - tr.tmin
-        sr = 0.5/tr.deltat
+        sr = 0.5 / tr.deltat
         return tr.transfer(transfer_function=diff_response,
                            freqlimits=(1./t, 1.1/t, sr*1.1, sr*1.5),
                            tfade=t*0.15)
@@ -386,45 +409,26 @@ class Tracer:
     def simulate(self, tr):
         return tr.transfer(transfer_function=self.target.filter.response)
 
-    def setup_from_engine(self, engine=None):
-        if engine and self.target.store_id:
-            try:
-                response = engine.process(sources=[self.source], targets=[self.target])
-            except OutOfBounds as e:
-                self.traces = e
-                return True
-            traces = response.pyrocko_traces()
-            proc = []
-            for tr in traces:
-                #if not isinstance(self.source, RectangularSource) and not isinstance(self.source, CircularSource):
-                if not isinstance(self.source, CircularSource):
-                    if self.source.brunes:
-                        self.source.brunes.preset(source=self.source, target=self.target)
-                        tr = tr.transfer(transfer_function=self.source.brunes)
-                tr = self._apply_transfer(tr)
-                if self.target.filter:
-                    tr = self.simulate(tr)
-                proc.append(tr)
-            self.traces = proc
-            #self.traces = rotate_rtz(self.traces)
-            self.config = engine.get_store_config(self.target.store_id)
+    def setup_from_engine(self, engine):
+        try:
+            response = engine.process(sources=[self.source], targets=[self.target])
+        except OutOfBounds as e:
+            self.trace = "OutOfBounds"
+            self.processed = self.trace
             return True
-        return
-
-    def process(self, **pp_kwargs):
-        '''seems to be visited twice...!'''
-        tr = self.processed
-        if not tr:
-            if isinstance(self.traces, OutOfBounds):
-                self.processed = self.traces
-                return self.processed
-            tr_raw = self.filter_by_channel(self.channel).copy()
-            tr = self.chopper.chop(self.source, self.target, tr_raw)
-            self.processed = tr
-        if isinstance(self.processed, OutOfBounds):
-            return tr
-
-        return self.post_process(tr, **pp_kwargs)
+        self.trace = response.pyrocko_traces()[0]
+        self.trace.meta = tr_meta_init
+        if not isinstance(self.source, RectangularSource): #and not isinstance(self.source, CircularSource):
+        #if not isinstance(self.source, CircularSource):
+            if self.source.brunes:
+                self.source.brunes.preset(source=self.source, target=self.target)
+                self.trace = self.trace.transfer(transfer_function=self.source.brunes)
+        self.trace = self._apply_transfer(self.trace)
+        if self.target.filter:
+            self.trace = self.simulate(self.trace)
+        #self.traces = rotate_rtz(self.traces)
+        self.config = engine.get_store_config(self.target.store_id)
+        return True
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
         if normalize:
@@ -435,10 +439,6 @@ class Tracer:
         if self.want_trace_length is not None and trace_length!=self.want_trace_length:
             diff = trace_length - self.want_trace_length
             tr.extend(tmin=tr.tmin-diff, tr=tr.tmax)
-        return tr
-
-    def filter_by_channel(self, channel):
-        tr = filter(lambda t: t.nslc_id[3]==channel, self.traces)[0]
         return tr
 
     def set_geometry(self, distances, azimuths, depths):
@@ -462,7 +462,71 @@ class Tracer:
         return self.source.distance_to(self.target), self.source.depth
 
     def label(self):
-        return self.config.id
+        if self.config is not None:
+            l = self.config.id
+        else:
+            l = "%s-%s" % (self.source.time, ".".join(self.target.codes))
+        return l
+
+
+class QSeisTraces(Tracer):
+    def __init__(self, *args, **kwargs):
+        Tracer.__init__(self, *args, **kwargs)
+
+        if self.target.store_id is not None and not self.kwargs.pop('no_config', False):
+            self.config.receiver_distances = [source.distance_to(target)/1000.]
+            self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
+            self.config.source_depth = source.depth/1000.
+            self.config.id+= "_%s" % (self.source.id)
+            self.config.regularize()
+
+
+
+class AhfullgreenTracer(Tracer):
+    def __init__(self, material, deltat, *args, **kwargs):
+        Tracer.__init__(self, *args, **kwargs)
+        self.material = material
+        self.deltat = deltat
+        self.f = (0.0, 0.0, 0.0)
+
+    def setup_data(self, *args, **kwargs):
+        m = self.material
+        m6 = self.source.pyrocko_moment_tensor().m6()
+        n, e = orthodrome.latlon_to_ne_numpy(self.source.effective_lat,
+                                             self.source.effective_lon,
+                                             self.target.effective_lat,
+                                             self.target.effective_lon)
+        n = n[0]
+        e = e[0]
+        d = self.source.depth
+        xyz = (n, e, d)
+        ns = num.sqrt(n**2 + e**2 + d**2) / m.vs / self.deltat * 2.
+        ns = int(ns/2)*2
+        out_x = num.zeros(ns)
+        out_y = num.zeros(ns)
+        out_z = num.zeros(ns)
+        add_seismogram(m.vp, m.vs, m.rho, m.qp, m.qs, xyz, self.f, m6,
+                       self.target.quantity, self.deltat, 0.0,
+                       out_x, out_y, out_z, Impulse())
+
+        self.trace = trace.Trace(
+            channel='Z', tmin=self.source.time, deltat=self.deltat,
+            ydata=out_z, meta=tr_meta_init)
+
+        return self.trace
+
+    def process(self, **kwargs):
+        if self.processed is not "NoData" or self.processed is False:
+            self.processed = self.chopper.chop(
+                self.source, self.target, self.trace)
+            if self.processed != "NoData":
+                self.processed = self.post_process(self.processed, **kwargs)
+
+        return self.processed
+
+    def __str__(self):
+        s = "trace: %s \nprocessed: %s" % (self.trace, self.processed)
+        return s
 
 class DataTracer(Tracer):
     def __init__(self, incidence_angle=0., data_pile=None,
@@ -474,31 +538,31 @@ class DataTracer(Tracer):
         self.incidence_angle = incidence_angle
         self.back_azimuth = self.target.azibazi_to(self.source)[1]
 
-    def setup_data(self):
-        self.process()
-        return True
-
-    def process(self):
-        tr = self.processed
-        if not tr:
-            if self.rotate_channels:
-                trs = self.chopper.chop_pile(
-                    self.data_pile, self.source, self.target, all_channels=True)
-                if trs is None:
-                    tr = None
-                else:
-                    trs = trace.rotate_to_lqt(
-                        trs, self.back_azimuth, self.incidence_angle,
-                        in_channels=self.rotate_channels['in_channels'],
-                        out_channels=self.rotate_channels['out_channels'])
-                    tr = filter(tr.channel==self.channel, trs)
+    def setup_data(self, *args, **kwargs):
+        if self.rotate_channels:
+            trs = self.chopper.chop_pile(
+                self.data_pile, self.source, self.target, all_channels=True)
+            if trs is None:
+                tr = False
             else:
-                tr = self.chopper.chop_pile(
-                    self.data_pile, self.source, self.target, all_channels=False)
+                trs = trace.rotate_to_lqt(
+                    trs, self.back_azimuth, self.incidence_angle,
+                    in_channels=self.rotate_channels['in_channels'],
+                    out_channels=self.rotate_channels['out_channels'])
+                tr = filter(tr.channel==self.channel, trs)
+        else:
+            tr = self.chopper.chop_pile(
+                self.data_pile, self.source, self.target, all_channels=False)
+            if tr is None:
+                tr = False
+            else:
+                tr.meta = tr_meta_init
+        self.trace = tr
+        self.processed = self.trace
+        return self.trace
 
-        self.traces = [tr]
-        self.processed = tr
-        return tr
+    def process(self, **kwargs):
+        return self.processed
 
     def label(self):
         return '%s/%s' % (util.time_to_str(self.source.time), ".".join(self.target.codes))
@@ -513,10 +577,9 @@ class Chopper():
         self.endphasestr = endphasestr
         self.phase_position = phase_position
         self.fixed_length = fixed_length
-        self.chopped = DDContainer()
         self.xfade = xfade
 
-    def chop(self, s, t, tr, offset=0., debug=False):
+    def chop(self, s, t, tr, offset=0., inplace=False):
         dist = s.distance_to(t)
         depth = s.depth
         tstart = self.phase_pie.t(self.startphasestr, (depth, dist))
@@ -528,14 +591,17 @@ class Chopper():
             tend = tstart+self.by_magnitude(s.magnitude)
         else:
             raise Exception('Need to define exactly one of endphasestr and fixed length')
-        tr_bkp = tr
-        tr = tr.copy()
+
+        if inplace is False:
+            tr = tr.copy()
         tstart += (offset + s.time)
         tend += (offset + s.time)
         tstart, tend = self.setup_time_window(tstart, tend)
-        tr.chop(tstart, tend)
-        #tr.extend(tr.tmin-1, tr.tmax+1, 'repeat')
-        self.chopped.add(s, t, tr)
+        try:
+            tr.chop(tstart, tend)
+        except trace.NoData as e:
+            logger.warn("chopping trace: %s failed:  %s" % (tr, "NoData"))
+            return "NoData"
         return tr
 
     def chop_pile(self, data_pile, source, target, all_channels=False):
@@ -557,7 +623,6 @@ class Chopper():
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
         except IndexError as e:
             tr = None
-        self.chopped.add(source, target, tr)
         return tr
 
     def setup_time_window(self, tstart, tend):
@@ -571,9 +636,6 @@ class Chopper():
 
     def get_tfade(self, t_span):
         return self.xfade*t_span
-
-    def iter_results(self):
-        return self.chopped.iterdd()
 
     def set_trange(self):
         _,_, times = self.table.as_lists()
@@ -597,37 +659,6 @@ class Chopper():
             return self.phase_pie.arrival(self.startphasestr, (s, t))
 
 
-class LineSource(DCSource):
-    discretized_source_class = meta.DiscretizedMTSource
-    i_sources = Int.T()
-    velocity = Float.T()
-
-    def base_key(self):
-        return DCSource.base_key(self)+(self.length, velocity)
-
-    def discretize_basesource(self, store):
-        points = num.zeros(20)
-
-        c = store.config
-        dz = c.source_depth_delta
-
-        #i_sources sollte eher i_sources/2. sein!
-        points = num.arange(-dz*i_sources, dz*i_sources, dz)
-        print 'line_source_points ', points
-
-        times = num.ones(len(points)) * (points[-1]-points[0])/self.velocity
-
-        m6s = num.ones(len(points))
-        ds = meta.DiscretizedMTSource(
-            lat=self.lat,
-            lon=self.lon,
-            times=times,
-            north_shifts=self.north_shift + north_shifts,
-            east_shifts=self.east_shift,
-            depths=self.depth,
-            m6s=m6s)
-        return ds
-
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
         self.Q = Q
@@ -641,7 +672,6 @@ class QResponse(trace.FrequencyResponse):
         f, a = tr.spectrum()
         B = num.fft.rfft(self.evaluate(a, f))
         new_tr.set_ydata(num.fft.irfft(B))
-        new_tr.snuffle()
         return new_tr
 
     def evaluate(self,A,  freqs):
