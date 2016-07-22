@@ -471,8 +471,15 @@ class SyntheticCouple():
         if self._cc is None:
             (tr1, _) = self.spectra.spectra[0]
             (tr2, _) = self.spectra.spectra[1]
-            ctr = trace.correlate(tr1.processed, tr2.processed, mode='same',
-                                  normalization='normal')
+            if tr1.processed and tr2.processed:
+                ctr = trace.correlate(
+                    tr1.processed,
+                    tr2.processed,
+                    mode='same',
+                    normalization='normal')
+            else:
+                self._cc = 0.
+                return self._cc
             t, self._cc = ctr.max()
         return self._cc
 
@@ -519,6 +526,7 @@ class SyntheticCouple():
         for i, tracer in enumerate(self.master_slave):
             ax = fig.add_subplot(3, 1, 1+i)
             ax.set_xlabel('time [s]')
+            tracer.setup_data()
             tr = tracer.processed
             otime = tracer.source.time
             plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color='black')
@@ -720,11 +728,12 @@ def spectral_ratio(couple):
 
 
 class QInverter:
-    def __init__(self, couples, cc_min=0.8):
+    def __init__(self, couples, cc_min=0.8, onthefly=False):
         if len(couples)==0:
             raise Exception('Empty list of test couples')
         self.couples = couples
         self.cc_min = cc_min
+        self.onthefly = onthefly
 
     def invert(self):
         self.allqs = []
@@ -732,6 +741,13 @@ class QInverter:
         widgets = ['regression analysis', progressbar.Percentage(), progressbar.Bar()]
         pb = progressbar.ProgressBar(maxval=len(self.couples), widgets=widgets).start()
         for i_c, couple in enumerate(self.couples):
+            if self.onthefly:
+                tr1 = couple.master_slave[0].setup_data()
+                tr2 = couple.master_slave[1].setup_data()
+                if not tr1 or not tr2:
+                    continue
+                else:
+                    couple.process()
             cc_coef = couple.cc_coef()
             if cc_coef< self.cc_min:
                 logger.info('lower than cc threshold. skip')
@@ -747,6 +763,9 @@ class QInverter:
                 continue
             couple.invert_data = (dt, fx, slope, interc, 1./Q)
             self.allqs.append(1./Q)
+            if self.onthefly:
+                couple.master_slave[0].drop_data()
+                couple.master_slave[1].drop_data()
         pb.finish()
 
     def plot(self, ax=None, q_threshold=None, relative_to=None, want_q=False):
@@ -1584,31 +1603,33 @@ def apply_webnet():
                              chopper=p_chopper, channel=channel, fmin=fmin1,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
-        tracer1.setup_data()
+        #tracer1.setup_data()
 
         fmin2 = fmin_by_magnitude(s2.magnitude)
         tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t,
                              chopper=p_chopper, channel=channel, fmin=fmin2,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
-        tracer2.setup_data()
+        #tracer2.setup_data()
         if fmax-fmin1<fminrange or fmax-fmin2<fminrange:
             continue
         else:
             pair = [tracer1, tracer2]
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=method)
-            testcouple.process()
-            if testcouple.good:
-                testcouples.append(testcouple)
-                goods += 1
-            else:
-                bads += 1
+            testcouples.append(testcouple)
+
+            #testcouple.process()
+            #if testcouple.good:
+            #    testcouples.append(testcouple)
+            #    goods += 1
+            #else:
+            #    bads += 1
             tracers.extend(pair)
             #pairs.append(pair)
     print 'good/bad' , goods, bads
     colors = UniqueColor(tracers=tracers)
-    tracers = builder.build(tracers)
+    #tracers = builder.build(tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
@@ -1633,7 +1654,7 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.8)
+    inverter = QInverter(couples=testcouples, cc_min=0.8, onthefly=True)
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
     for i, tc in enumerate(num.random.choice(good_results, 10)):
