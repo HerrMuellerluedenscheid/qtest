@@ -567,6 +567,11 @@ class DataTracer(Tracer):
     def label(self):
         return '%s/%s' % (util.time_to_str(self.source.time), ".".join(self.target.codes))
 
+    def drop_data(self):
+        self.trace = None
+        self.processed = None
+
+
 class Chopper():
     def __init__(self, startphasestr=None, endphasestr=None, fixed_length=None,
                  by_magnitude=None, phase_position=0.5, xfade=0.0, phaser=None):
@@ -657,7 +662,6 @@ class Chopper():
             return self.phase_pie.arrival(self.startphasestr, (s.depth, s.distance_to(t)))
         except AttributeError:
             return self.phase_pie.arrival(self.startphasestr, (s, t))
-
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
