@@ -44,7 +44,7 @@ logger = logging.getLogger()
 pjoin = os.path.join
 km = 1000.
 
-methods_avail = ['fft', 'psd']
+methods_avail = ['fft', 'psd', 'filter']
 try:
     import pymutt
     methods_avail.append('pymutt')
@@ -285,13 +285,19 @@ def iter_chopper(tr, tinc=None, tpad=0.):
 _taperer = trace.CosFader(xfrac=0.15)
 
 
-def spectralize(tr, method='mtspec', chopper=None, tinc=None):
+def spectralize(tr, method='mtspec', **kwargs):
     if method=='fft':
+        chopper = kwargs.get('chopper', None)
+        if not chopper:
+            raise Exception('Need a chopper')
         # fuehrt zum amplitudenspektrum
         f, a = tr.spectrum(tfade=chopper.get_tfade(tr.tmax-tr.tmin))
 
     elif method=='psd':
         a_list = []
+        tinc = kwargs.get('tinc', None)
+        if not tinc:
+            raise Exception('Need tinc')
         #f_list = []
         tpad = tinc/2.
         #trs = []
@@ -362,6 +368,41 @@ def spectralize(tr, method='mtspec', chopper=None, tinc=None):
                       statistics=False)
         a = num.sqrt(a)
 
+    elif method == 'filter':
+        filters = kwargs.get('filters', None)
+        if not filters:
+            raise Exception("No filters defined")
+        f = []
+        a = []
+        ydatas = []
+        do_plot = False
+        if do_plot:
+            # plotting
+            copies = [tr]
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.plot(tr.get_xdata(), tr.get_ydata())
+
+        for filt in filters:
+            tr_work = tr.copy(data=True)
+            tr_work.taper(_taperer, inplace=True, chop=False)
+            tr_work.set_codes(network=str(filt))
+            fcenter, fwidth = filt
+            tr_work.highpass(4, fcenter-fwidth/2.)
+            tr_work.lowpass(4, fcenter+fwidth/2.)
+
+            # post taper to avoid misinterpretation of dc offset
+            tr_work.taper(_taperer, inplace=True, chop=False)
+            f.append(fcenter)
+            a.append(num.max(num.abs(tr_work.get_ydata())))
+            if do_plot:
+                ax.plot(tr_work.get_xdata(), tr_work.get_ydata())
+            #copies.append(tr_work)
+        #trace.snuffle(copies)
+        if do_plot:
+            plt.show()
+    else:
+        raise Exception("unknown method")
     return f, a
 
 
@@ -466,6 +507,7 @@ class SyntheticCouple():
         self.noise_level = 0
         self.invert_data = None
         self._cc = None
+        self.filters = {}
 
     def cc_coef(self):
         if self._cc is None:
@@ -503,11 +545,16 @@ class SyntheticCouple():
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
 
-    def get_spectrum(self, tr, tracer, wantlength):
+    def get_spectrum(self, tr, tracer, wantlength, spectralize_kwargs=None):
+        if not spectralize_kwargs:
+            spectralize_kwargs = {}
+        spectralize_kwargs.update({'tinc': tracer.tinc,
+                                   'chopper': tracer.chopper,
+                                   'filters': self.filters})
         length = tr.tmax - tr.tmin
         diff = wantlength - length
         tr.extend(tmin=tr.tmin-diff, tmax=tr.tmax, fillmethod='repeat')
-        return spectralize(tr, self.method, tracer.chopper, tracer.tinc)
+        return spectralize(tr, self.method, **spectralize_kwargs)
 
     def plot(self, colors, **kwargs):
         fn = kwargs.pop('savefig', False)
@@ -1088,8 +1135,22 @@ def dbtest(noise_level=0.0000000000005):
     lat = 50.2059
     lon = 12.5152
     sources = []
-    method = 'mtspec'
+    method = 'filter'
+    #method = 'mtspec'
     #method = 'sine_psd'
+    if method == 'filter':
+        fwidth = 10.
+        filters = [(30, fwidth), 
+                   (35, fwidth), 
+                   (40, fwidth), 
+                   (50, fwidth),
+                   (60, fwidth),
+                   (70, fwidth), 
+                   (80, fwidth),
+                   (100, fwidth*2),
+                   ]
+    else:
+        filters = None
     min_magnitude = 2.
     max_magnitude = 6.
     fminrange = 20.
@@ -1361,6 +1422,7 @@ def dbtest(noise_level=0.0000000000005):
     for i_p, pair in enumerate(pairs):
         pb.update(i_p)
         testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+        testcouple.filters = filters
         testcouple.process(noise=noise)
         if len(testcouple.spectra.spectra)!=2:
             logger.warn('not 2 spectra in test couple!!!! why?')
