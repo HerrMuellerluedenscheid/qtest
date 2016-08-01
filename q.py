@@ -20,6 +20,7 @@ from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
+from scipy import signal
 import matplotlib.pyplot as plt
 import numpy as num
 import os
@@ -285,6 +286,40 @@ def iter_chopper(tr, tinc=None, tpad=0.):
 _taperer = trace.CosFader(xfrac=0.15)
 
 
+cached_coefficients = {}
+def _get_cached_filter_coefs(order, corners, btype):
+    '''from pyrocko trace module'''
+    ck = (order, tuple(corners), btype)
+    if ck not in cached_coefficients:
+        if len(corners) == 0:
+            cached_coefficients[ck] = signal.butter(order, corners[0], btype=btype)
+        else:
+            cached_coefficients[ck] = signal.butter(order, corners, btype=btype)
+
+    return cached_coefficients[ck]
+
+
+def apply_filter(tr, order, flow, fhigh, demean=True):
+    '''Apply butterworth highpass to tr.
+       from pyrocko.trace.Trace
+
+    Mean is removed before filtering.
+    '''
+    for corner, btype in [(flow, 'low'), (fhigh, 'high')]:
+        tr.nyquist_check(corner, 'Corner frequency of highpass',
+                            warn=True, raise_exception=False)
+        (b,a) = _get_cached_filter_coefs(order, [corner*2.0*tr.deltat],
+                                         btype=btype)
+        data = tr.ydata.astype(num.float64)
+        if len(a) != order+1 or len(b) != order+1:
+            logger.warn('Erroneous filter coefficients returned by scipy.signal.butter')
+        if demean:
+            data -= num.mean(data)
+        tr.drop_growbuffer()
+        #self.ydata = signal.lfilter(b,a, data)
+        tr.ydata = signal.filtfilt(b,a, data)
+
+
 def spectralize(tr, method='mtspec', **kwargs):
     if method=='fft':
         chopper = kwargs.get('chopper', None)
@@ -388,8 +423,9 @@ def spectralize(tr, method='mtspec', **kwargs):
             tr_work.taper(_taperer, inplace=True, chop=False)
             tr_work.set_codes(network=str(filt))
             fcenter, fwidth = filt
-            tr_work.highpass(4, fcenter-fwidth/2.)
-            tr_work.lowpass(4, fcenter+fwidth/2.)
+            apply_filter(tr_work, 4, fcenter-fwidth/2., fcenter+fwidth/2.)
+            #tr_work.highpass(4, fcenter-fwidth/2.)
+            #tr_work.lowpass(4, fcenter+fwidth/2.)
 
             # post taper to avoid misinterpretation of dc offset
             tr_work.taper(_taperer, inplace=True, chop=False)
