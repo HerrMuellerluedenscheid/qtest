@@ -1,7 +1,9 @@
 import matplotlib as mpl
-mpl.use('Qt4Agg')
+mpl.use('Agg')
 mpl.rc('ytick', labelsize=10)
 mpl.rc('xtick', labelsize=10)
+import matplotlib.pyplot as plt
+plt.style.use('ggplot')
 
 import copy
 import progressbar
@@ -21,7 +23,6 @@ from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
 from scipy import signal
-import matplotlib.pyplot as plt
 import numpy as num
 import os
 import glob
@@ -838,13 +839,14 @@ class QInverter:
             else:
                 logger.info('higher than cc threshold. ')
             pb.update(i_c+1)
-            interc, slope, fx = spectral_ratio(couple)
+            interc, slope, fx, r, p, std = spectral_ratio(couple)
             dt = couple.delta_onset()
-            Q = num.pi*dt/slope
+            #Q = num.pi*dt/slope
+            Q = num.pi/slope
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
-            couple.invert_data = (dt, fx, slope, interc, 1./Q)
+            couple.invert_data = (dt, fx, slope, interc, 1./Q, r, p, std)
             self.allqs.append(1./Q)
             if self.onthefly:
                 couple.master_slave[0].drop_data()
@@ -880,45 +882,93 @@ class QInverter:
             ax.axvline(want_q, color='r')
         return
 
-    def analyze(self, couples=None):
-        # by meanmag
-        Qs = []
-        mags = []
-        magdiffs = []
+    def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
+        couples_with_data = filter(lambda x: x.invert_data is not None,
+                                   self.couples)
+        std_max = 0.002
+        #std_max = None
+        n = len(couples_with_data)
+        Qs = num.empty(n)
+        mags = num.empty(n)
+        magdiffs = num.empty(n)
+        cc = num.empty(n)
+        d_traveled = num.empty(n)
+        d_passing = num.empty(n)
+        rs = num.empty(n)
+        ps = num.empty(n)
+        stds = num.empty(n)
         by_target = {}
-        cc = []
-        for c in self.couples:
-            if c.invert_data is None:
-                continue
-            Q = c.invert_data[-1]
-            Qs.append(Q)
-            cc.append(c.cc_coef())
+        for ic, c in enumerate(couples_with_data):
+            dt, fx, slope, interc, Q, r, p, std = c.invert_data
+            rs[ic] = r**2
+            ps[ic] = num.log(p)
+            stds[ic] = std
+            Qs[ic] = Q
+            cc[ic] = c.cc_coef()
             meanmag = (c.master_slave[0].source.magnitude+c.master_slave[1].source.magnitude)/2.
-            mags.append(meanmag)
-
+            mags[ic] = meanmag
+            d_traveled[ic] = c.ray[3]
+            d_passing[ic] = c.ray[4]
             magdiff = abs(c.master_slave[0].source.magnitude-c.master_slave[1].source.magnitude)
-            magdiffs.append(magdiff)
+            magdiffs[ic] = magdiff
             try:
                 by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ].append(Q)
             except KeyError:
                 by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ] = [Q]
-        fig = plt.figure()
-        ax = fig.add_subplot(2, 2, 1)
-        ax.set_title('cc coef vs Q')
-        ax.plot(cc, Qs, 'bo')
+        
+        results = {'Q': Qs,
+                   'mean mag': mags,
+                   'magdiff': magdiffs,
+                   'cc': cc,
+                   'd_trav': d_traveled,
+                   'd_pass': d_passing,
+                   'r2-value': rs,
+                   'log(p-value)': ps,
+                   'std': stds,
+                   }
 
-        ax = fig.add_subplot(2, 2, 2)
-        ax.plot(mags, Qs, 'bo')
-        ax.set_title('mean magnitude vs Q')
+        if std_max is not None:
+            indx = num.where(stds<=std_max)
+            indxinvert = num.where(stds>std_max)
+        else:
+            indx = None
+            indxinvert = num.where(False)
 
-        ax = fig.add_subplot(2, 2, 3)
-        ax.plot(magdiffs, Qs, 'bo')
-        ax.set_title('magnitude difference vs Q')
+        markersize = 0.5
+        invert_indx_style = {'marker': 'o', 'markerfacecolor': 'black', 
+                             'alpha': 0.5, 'markersize': markersize,
+                             'linestyle': 'None'}
 
+        fig = plt.figure(figsize=(10, 10))
+        nrows = 3
+        ncols = 3
+
+        combinations = [('cc', 'Q'), 
+                        ('mean mag', 'Q'),
+                        ('magdiff', 'Q'),
+                        ('d_trav', 'Q'),
+                        ('d_pass', 'Q'),
+                        ('d_pass', 'd_trav'),
+                        ('r2-value', 'Q'),
+                        ('log(p-value)', 'Q'),
+                        ('std', 'Q'), 
+        ]
+
+        for icomb, combination in enumerate(combinations):
+            wanty, wantx = combination
+            ax = fig.add_subplot(nrows, ncols, icomb+1)
+            ax.plot(results[wantx][indx], results[wanty][indx], 'bo', markersize=markersize)
+            ax.plot(results[wantx][indxinvert], results[wanty][indxinvert], **invert_indx_style)
+            ax.set_xlabel(wantx)
+            ax.set_ylabel(wanty)
+
+        plt.tight_layout()
+        fig.savefig(fnout_prefix + "_qvs.png")
+        
         nrow = 3
         ncolumns = int(len(by_target)/nrow)+1
-        fig = plt.figure()
-        i = 0
+        fig = plt.figure(figsize=(10, 10))
+        i = 1
         q_threshold = 2000
         for k, v in by_target.items():
             if len(v)<3:
@@ -927,6 +977,9 @@ class QInverter:
             ax.hist(filter(lambda x: x<=q_threshold, v), bins=20)
             ax.set_title(k)
             i += 1
+        
+        plt.tight_layout()
+        fig.savefig(fnout_prefix + "_bytarget.png")
 
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
@@ -1602,19 +1655,26 @@ def apply_webnet():
 
     # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
     # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
-    load_coupler = False
+    load_coupler = True
     builder = Builder()
     #method = 'sine_psd'
-    method = 'mtspec'
+    #method = 'mtspec'
+    method = 'filter'
+    if method == 'filter':
+        fwidth = 4.
+        delta_f = 3.
+        fcs = num.arange(40, 90, delta_f)
+        filters = [(f, fwidth) for f in fcs]
+    else:
+        filters = None
     use_common = True
     fmax = 110
     fminrange = 30
 
     vp = 6000.
     fmin_by_magnitude = Magnitude2fmin.setup(lim=30)
-    min_magnitude = 0.3
     max_magnitude = 4.
-    #min_magnitude = 0.
+    min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
@@ -1672,7 +1732,7 @@ def apply_webnet():
             sources, targets, mod, [want_phase, want_phase.lower()],
             ignore_segments=True, dump_to=fn_coupler)
 
-    fig, ax = Animator.get_3d_ax()
+    #fig, ax = Animator.get_3d_ax()
     #print coupler.filtrate
     pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate,
                                          ignore=ignore, max_mag_diff=0.5)
@@ -1682,7 +1742,7 @@ def apply_webnet():
         paired_sources.extend([s1, s2])
 
     paired_source_dict = paired_sources_dict(paired_sources)
-    Animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=ax, alpha=1)
+    #Animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=ax, alpha=1)
     #pb = progressbar.ProgressBar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
     #for i_r, r in enumerate(pairs_by_rays):
     #    e1, e2, t, td, pd, segments = r
@@ -1715,6 +1775,8 @@ def apply_webnet():
             pair = [tracer1, tracer2]
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=method)
+            testcouple.ray = r
+            testcouple.filters = filters
             testcouples.append(testcouple)
 
             #testcouple.process()
