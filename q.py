@@ -753,8 +753,13 @@ def spectral_ratio(couple):
     else:
         cfmin = None
         cfmax = None
-
+    dis = None
     for tr, fxfy in couple.spectra.spectra:
+        if dis is None:
+            dis = tr.source.distance_to(tr.target)
+        else:
+            assert tr.source.distance_to(tr.target) < dis
+
         fs, a = fxfy
         if cfmin and cfmax:
             fmin = cfmin
@@ -885,8 +890,8 @@ class QInverter:
     def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
         couples_with_data = filter(lambda x: x.invert_data is not None,
                                    self.couples)
-        std_max = 0.002
-        #std_max = None
+        #std_max = 0.002
+        std_max = None
         n = len(couples_with_data)
         Qs = num.empty(n)
         mags = num.empty(n)
@@ -924,12 +929,21 @@ class QInverter:
                    'd_pass': d_passing,
                    'r2-value': rs,
                    'log(p-value)': ps,
-                   'std': stds,
-                   }
-
-        if std_max is not None:
-            indx = num.where(stds<=std_max)
-            indxinvert = num.where(stds>std_max)
+                   'std': stds, }
+        selector_min = None
+        selector_max = None
+        #selector = "std"
+        #selector_max = 0.005
+        selector = "r2-value"
+        #selector_min = 0.75
+        selector_min = 0.90
+        if selector is not None:
+            if selector_max is not None:
+                indx = num.where(results[selector]<=selector_max)
+                indxinvert = num.where(results[selector]>selector_max)
+            elif selector_min is not None:
+                indx = num.where(results[selector]<=selector_min)
+                indxinvert = num.where(results[selector]>selector_min)
         else:
             indx = None
             indxinvert = num.where(False)
@@ -939,21 +953,16 @@ class QInverter:
                              'alpha': 0.5, 'markersize': markersize,
                              'linestyle': 'None'}
 
-        fig = plt.figure(figsize=(10, 10))
-        nrows = 3
-        ncols = 3
-
-        combinations = [('cc', 'Q'), 
-                        ('mean mag', 'Q'),
-                        ('magdiff', 'Q'),
-                        ('d_trav', 'Q'),
-                        ('d_pass', 'Q'),
-                        ('d_pass', 'd_trav'),
-                        ('r2-value', 'Q'),
-                        ('log(p-value)', 'Q'),
-                        ('std', 'Q'), 
-        ]
-
+        fig = plt.figure(figsize=(16, 14))
+        keys = results.keys()
+        combinations = []
+        for ik in xrange(len(keys)):
+            k1 = keys.pop()
+            for k2 in keys:
+                combinations.append((k1, k2))
+        nrows = num.ceil(num.sqrt(len(combinations)+1))
+        ncols = int(num.ceil(float(len(combinations)+1)/nrows))
+        
         for icomb, combination in enumerate(combinations):
             wanty, wantx = combination
             ax = fig.add_subplot(nrows, ncols, icomb+1)
@@ -961,9 +970,11 @@ class QInverter:
             ax.plot(results[wantx][indxinvert], results[wanty][indxinvert], **invert_indx_style)
             ax.set_xlabel(wantx)
             ax.set_ylabel(wanty)
+        ax = fig.add_subplot(nrows, ncols, icomb+2)
+        ax.hist(results["Q"][indx], bins=30)
 
         plt.tight_layout()
-        fig.savefig(fnout_prefix + "_qvs.png")
+        fig.savefig(fnout_prefix + "_qvs.png", dpi=200)
         
         nrow = 3
         ncolumns = int(len(by_target)/nrow)+1
