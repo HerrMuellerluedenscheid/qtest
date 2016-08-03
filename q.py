@@ -499,7 +499,7 @@ class Spectra(DDContainer):
             func=self.fit_function
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
-            
+
     def tracer(self):
         (tr1, _) = self.spectra[0]
         (tr2, _) = self.spectra[1]
@@ -509,7 +509,7 @@ class Spectra(DDContainer):
         # list of amplitude spectra arrays
         a = []
         for s in self.spectra:
-            a.append(a[1][1])
+            a.append(s[1][1])
         return a
 
     def freqs(self):
@@ -523,6 +523,23 @@ class Spectra(DDContainer):
         # return array with frequencies used e.g. for interpolation
         return num.sort(num.unique(num.array(self.freqs())))
 
+    def get_interpolated_spectra(self, fmin=None, fmax=None):
+        if not fmin:
+            fmin = -99999.
+        if not fmax:
+            fmax = 999999.
+        both_f = self.combined_freqs()
+        indx = num.where(num.logical_and(both_f>=fmin, both_f<=fmax))
+        f_use = both_f[indx]
+        a_s = num.empty((2, len(f_use)))
+        i = 0
+        for tr, fxfy in self.spectra:
+            fx, fy = fxfy
+            f = interpolate.interp1d(fx, fy)
+            a_s[i][:] = f(f_use)
+            i += 1
+
+        return f_use, a_s
 
 class TracerColor():
     def __init__(self, attr, color_map=mpl.cm.coolwarm, tracers=None):
@@ -821,7 +838,7 @@ def spectral_ratio(couple):
     i is the mean intercept.
     s is the slope ratio of each individual linregression.'''
     assert len(couple.spectra.spectra)==2, '%s spectra found: %s' % (len(couple.spectra.spectra), couple.spectra.spectra)
-    
+
     if couple.use_common:
         cfmin, cfmax = couple.frequency_range_work()
     else:
@@ -829,18 +846,9 @@ def spectral_ratio(couple):
         cfmin = None
         cfmax = None
 
-    both_f = couple.spectra.combined_freqs()
-    indx = num.where(num.logical_and(both_f>=cfmin, both_f<=cfmax))
-    f_use = both_f[indx]
-    a_s = num.empty((2, len(f_use)))
-    i = 0
-    for tr, fxfy in couple.spectra.spectra:
-        fx, fy = fxfy
-        f = interpolate.interp1d(fx, fy)
-        a_s[i][:] = f(f_use)
-        i += 1
+    f_use, a_s = couple.spectra.get_interpolated_spectra(cfmin, cfmax)
 
-    slope, interc, r, p, std = linregress(f_use, num.log(a_s[0]/a_s[1]))
+    slope, interc, r, p, std = linregress(f_use, num.log(a_s[1]/a_s[0]))
 
     return interc, slope, f_use, a_s, r, p, std
 
@@ -871,13 +879,12 @@ class QInverter:
             if cc_coef< self.cc_min:
                 logger.info('lower than cc threshold. skip')
                 continue
-            else:
-                logger.info('higher than cc threshold. ')
+            #else:
+                #logger.info('higher than cc threshold. ')
             pb.update(i_c+1)
             interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
             dt = couple.delta_onset()
             Q = num.pi*dt/slope
-            #Q = num.pi/slope
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
@@ -919,24 +926,38 @@ class QInverter:
 
     def analyze_selected_couples(self, couples, indx, indxinvert):
         fig = plt.gcf()
-        ax = fig.add_subplot(221)
+        ax1 = fig.add_subplot(221)
+        ax2 = fig.add_subplot(222)
+        ax3 = fig.add_subplot(223)
+        ax4 = fig.add_subplot(224)
+
         for i in indx[0]:
             c = couples[i]
-            for tr, fxfy in c.spectra.spectra:
-                fs, a = fxfy
-                ax.plot(fs, a, alpha=0.1, linewidth=0.1, color='blue')
+            freqs = c.spectra.freqs()
+            amps = c.spectra.amps()
+            fmin, fmax = c.frequency_range_work()
+            freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
 
-        ax = fig.add_subplot(222)
+            for i in xrange(1):
+                ax1.plot(freqs[i], amps[i], alpha=0.1, linewidth=0.1, color='blue')
+            ax3.plot(freqsi, ampsi[0]/ampsi[1], alpha=0.1, linewidth=0.1, color='blue')
+
         for i in indxinvert[0]:
             c = couples[i]
-            for tr, fxfy in c.spectra.spectra:
-                fs, a = fxfy
-                ax.plot(fs, a, alpha=0.05, linewidth=0.1, color='red')
-        
-        ax = fig.add_subplot(223)
-        
-        ax = fig.add_subplot(224)
-        
+            freqs = c.spectra.freqs()
+            amps = c.spectra.amps()
+            fmin, fmax = c.frequency_range_work()
+            freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
+
+            for i in xrange(1):
+                ax2.plot(freqs[i], amps[i], alpha=0.05, linewidth=0.1, color='red')
+            ax4.plot(freqsi, ampsi[0]/ampsi[1], alpha=0.1, linewidth=0.1, color='blue')
+
+        for ax in [ax1, ax2, ax3, ax4]:
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+
+
     def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
         couples_with_data = filter(lambda x: x.invert_data is not None,
                                    self.couples)
@@ -976,7 +997,7 @@ class QInverter:
                 by_target[key].append(Q)
             except KeyError:
                 by_target[key] = [Q]
-        
+
         results = {'Q': Qs,
                    'mean mag': mags,
                    'magdiff': magdiffs,
@@ -1295,12 +1316,12 @@ def wanted_q(mod, z):
 
 
 
-def dbtest(noise_level=0.0000000000005):
+def dbtest(noise_level=0.0000000000000000005):
     print '-------------------db test-------------------------------'
-    use_real_shit = True
+    use_real_shit = False
     use_extended_sources = False
     use_responses = True                            # 2 test
-    load_coupler = True
+    load_coupler = False
     test_scenario = True
     #want_station = ('cz', 'nkc', '')
     #want_station = ('cz', 'kac', '')
@@ -1334,7 +1355,7 @@ def dbtest(noise_level=0.0000000000005):
     fmin = 31.
     fmin = Magnitude2fmin.setup(lim=fmin)
     fmax = 90.
-    window_by_magnitude = Magnitude2Window.setup(0.2, 0.02)
+    window_by_magnitude = Magnitude2Window.setup(0.08, 4.)
     quantity = 'displacement'
     #store_id = 'qplayground_total_2'
     #store_id = 'qplayground_total_2_q25'
@@ -1343,15 +1364,22 @@ def dbtest(noise_level=0.0000000000005):
     #store_id = 'qplayground_total_4_hr'
     #store_id = 'qplayground_total_4_hr_full'
     store_id = 'ahfullgreen_3'
+    #store_id = 'ahfullgreen_4'
 
     # setting the dc components:
 
-    strikemin = 160
-    strikemax = 180
-    dipmin = -60
-    dipmax = -80
-    rakemin = 20
-    rakemax = 40
+    #strikemin = 160
+    #strikemax = 180
+    #dipmin = -60
+    #dipmax = -80
+    #rakemin = 20
+    #rakemax = 40
+    strikemin = 170
+    strikemax = 170
+    dipmin = -70
+    dipmax = -70
+    rakemin = 30
+    rakemax = 30
 
     engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
     #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
@@ -1378,9 +1406,10 @@ def dbtest(noise_level=0.0000000000005):
         distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 200)
         source_depths = num.arange(zmin, zmax, 200)
 
-    perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
-    perturbation.plot()
-    p_chopper = Chopper('first(p)', phase_position=0.3,
+    #perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
+    perturbation = None
+    #perturbation.plot()
+    p_chopper = Chopper('first(p)', phase_position=0.5,
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
     stf_type = 'brunes'
@@ -1397,7 +1426,8 @@ def dbtest(noise_level=0.0000000000005):
         noise = Noise(files=fn_noise, scale=noise_level)
         noise_pile = pile.make_pile(fn_records)
     else:
-        noise = RandomNoiseConstantLevel(noise_level)
+        #noise = RandomNoiseConstantLevel(noise_level)
+        noise = None
         noise_pile = None
 
     events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
@@ -1468,7 +1498,8 @@ def dbtest(noise_level=0.0000000000005):
             for d in distances:
                 d = num.sqrt(d**2/2.)
                 for sd in source_depths:
-                    mag = float(1.+num.random.random()*0.2)
+                    #mag = float(1.+num.random.random()*0.2)
+                    mag = 1.
                     strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
                                                                              dipmin, dipmax,
                                                                              rakemin, rakemax)
@@ -1476,11 +1507,9 @@ def dbtest(noise_level=0.0000000000005):
                     e = model.Event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
                     if use_extended_sources is True:
                         sources.append(e2extendeds(e, north_shift=float(d),
-                        #print 'use line source!'
-                        #sources.append(e2linesource(e, north_shift=float(d),
-                                               east_shift=float(d),
-                                               nucleation_radius=nucleation_radius,
-                                               stf_type=stf_type))
+                                                   east_shift=float(d),
+                                                   nucleation_radius=nucleation_radius,
+                                                   stf_type=stf_type))
                     else:
                         sources.append(e2s(e, north_shift=float(d),
                                            east_shift=float(d),
@@ -1534,7 +1563,8 @@ def dbtest(noise_level=0.0000000000005):
                         ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
     #fig, ax = animator.get_3d_ax()
     #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(4, 1200, data=coupler.filtrate, max_mag_diff=0.1)
+    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate,
+                                         max_mag_diff=0.5)
     animator = Animator(pairs_by_rays)
     #plt.show()
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
@@ -1556,6 +1586,7 @@ def dbtest(noise_level=0.0000000000005):
     #print 'done'
     #pb.finish()
     #plt.show()
+    testcouples = []
     pairs = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1 = p
@@ -1568,9 +1599,9 @@ def dbtest(noise_level=0.0000000000005):
             #t.dip = -90. + i1
             #t.azimuth = t.azibazi_to(sx)[1]
             tracer1 = Tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
-                             fmax=fmax, want=quantity,
-                             perturbation=perturbation.perturb(0))
-
+                             fmax=fmax, want=quantity)
+                             #perturbation=perturbation.perturb(0))
+            tracer1.engine = engine
             dist1, depth1 = tracer1.get_geometry()
             if dist1< dist_min or dist1>dist_max:
                 break
@@ -1579,38 +1610,47 @@ def dbtest(noise_level=0.0000000000005):
             pair.append(tracer1)
             tracers.extend(pair)
             pairs.append(pair)
+        testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+        testcouple.ray = p
+        testcouple.filters = filters
+        #testcouple.process(noise=noise)
+        #if len(testcouple.spectra.spectra)!=2:
+        #   logger.warn('not 2 spectra in test couple!!!! why?')
+        #   continue
+        testcouples.append(testcouple)
     if len(tracers)==0:
-        raise exception('no tracers survived the assessment')
+        raise Exception('no tracers survived the assessment')
 
-    builder = Builder()
-    tracers = builder.build(tracers, engine=engine, snuffle=False)
-    colors = UniqueColor(tracers=tracers)
+    #builder = Builder()
+    #tracers = builder.build(tracers, engine=engine, snuffle=False)
+    #colors = UniqueColor(tracers=tracers)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #fig = plt.gcf()
     #fig.savefig('location_model_db1.png', dpi=200)
     #plt.show()
-    testcouples = []
-    widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
-    pb = progressbar.ProgressBar(len(pairs)-1, widgets=widgets).start()
-    for i_p, pair in enumerate(pairs):
-        pb.update(i_p)
-        testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
-        testcouple.filters = filters
-        testcouple.process(noise=noise)
-        if len(testcouple.spectra.spectra)!=2:
-            logger.warn('not 2 spectra in test couple!!!! why?')
-            continue
-        testcouples.append(testcouple)
-    pb.finish()
-    testcouples = filter(lambda x: x.good==True, testcouples)
+    #widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
+    #pb = progressbar.ProgressBar(len(pairs)-1, widgets=widgets).start()
+    #for i_p, pair in enumerate(pairs):
+    #    pb.update(i_p)
+    #    testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+    #    testcouple.ray = r
+    #    testcouple.filters = filters
+    #    testcouple.process(noise=noise)
+    #    if len(testcouple.spectra.spectra)!=2:
+    #        logger.warn('not 2 spectra in test couple!!!! why?')
+    #        continue
+    #    testcouples.append(testcouple)
+    #pb.finish()
+    #testcouples = filter(lambda x: x.good==True, testcouples)
     #outfn = 'testimage'
     #plt.gcf().savefig('output/%s.png' % outfn)
-    inverter = QInverter(couples=testcouples)
+    inverter = QInverter(couples=testcouples, onthefly=True, cc_min=0.5)
     inverter.invert()
-    for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
-        fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
-        testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
-    inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
+    #for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
+    #    fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
+    #    testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
+    inverter.plot()
+    #inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
     fig = plt.gcf()
     plt.tight_layout()
     fig.savefig('synthetic_tests/%s/hist_db%s.png' %(want_phase, store_id), dpi=200)
@@ -1757,6 +1797,7 @@ def apply_webnet():
 
     vp = 6000.
     fmin_by_magnitude = Magnitude2fmin.setup(lim=30)
+    #min_magnitude = 0.3
     max_magnitude = 4.
     min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
@@ -1948,8 +1989,8 @@ if __name__=='__main__':
     #invert_test_2()
     #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
-    #dbtest()
-    apply_webnet()
+    dbtest()
+    #apply_webnet()
     plt.show()
     #noise_test()
     #qp_model_test()

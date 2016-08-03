@@ -1,3 +1,4 @@
+import numpy as num
 from pyrocko import moment_tensor
 from matplotlib import pyplot as plt
 
