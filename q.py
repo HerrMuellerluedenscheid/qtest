@@ -22,7 +22,7 @@ from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
-from scipy import signal
+from scipy import signal, interpolate
 import numpy as num
 import os
 import glob
@@ -102,6 +102,10 @@ def ax_if_needed(ax):
         fig = plt.figure(figsize=(5,5))
         ax = fig.add_subplot(111)
     return ax
+
+
+def flatten_list(a):
+    return [c for e in a for c in e]
 
 
 def plot_traces(tr, t_shift=0, ax=None, label='', color='r'):
@@ -495,6 +499,29 @@ class Spectra(DDContainer):
             func=self.fit_function
         for s,ta,fxfy in self.iterdd():
             yield s, ta, curve_fit(func, *fxfy)
+            
+    def tracer(self):
+        (tr1, _) = self.spectra[0]
+        (tr2, _) = self.spectra[1]
+        return tr1, tr2
+
+    def amps(self):
+        # list of amplitude spectra arrays
+        a = []
+        for s in self.spectra:
+            a.append(a[1][1])
+        return a
+
+    def freqs(self):
+        # list of frequency arrays
+        f = []
+        for s in self.spectra:
+            f.append(s[1][0])
+        return f
+
+    def combined_freqs(self):
+        # return array with frequencies used e.g. for interpolation
+        return num.sort(num.unique(num.array(self.freqs())))
 
 
 class TracerColor():
@@ -707,6 +734,11 @@ class SyntheticCouple():
         d2 = ms[1].target.distance_to(ms[1].source)
         return d1, d2, ms[0].source.depth, ms[1].source.depth
 
+    def frequency_range_work(self):
+        return max(self.master_slave[0].fmin, self.master_slave[1].fmin),\
+            min(self.master_slave[0].fmax, self.master_slave[1].fmax)
+
+
     def __str__(self):
         s = 'master: %s\n slave: %s\n good: %s\n' % (
                                                     self.master_slave[0],
@@ -738,47 +770,6 @@ def noisy_spectral_ratios(pairs):
     return indxs, ratios
 
 
-def spectral_ratio(couple):
-    '''Ratio of two overlapping spectra.
-
-    i is the mean intercept.
-    s is the slope ratio of each individual linregression.'''
-    assert len(couple.spectra.spectra)==2, '%s spectra found: %s' % (len(couple.spectra.spectra), couple.spectra.spectra)
-    fx = []
-    fy = []
-    s = None
-    if couple.use_common:
-        cfmin = max([couple.spectra.spectra[1][0].fmin, couple.spectra.spectra[0][0].fmin])
-        cfmax = min([couple.spectra.spectra[1][0].fmax, couple.spectra.spectra[0][0].fmax])
-    else:
-        cfmin = None
-        cfmax = None
-    dis = None
-    for tr, fxfy in couple.spectra.spectra:
-        if dis is None:
-            dis = tr.source.distance_to(tr.target)
-        else:
-            assert tr.source.distance_to(tr.target) < dis
-
-        fs, a = fxfy
-        if cfmin and cfmax:
-            fmin = cfmin
-            fmax = cfmax
-        else:
-            fmin = max(tr.fmin, fs.min())
-            fmax = min(tr.fmax, fs.max())
-        ind = limited_frequencies_ind(fmin, fmax, fs)
-        slope, interc, r, p, std = linregress(fs[ind], num.log(a[ind]))
-        if not s:
-            i = interc
-            s = num.exp(slope)
-        else:
-            i += interc
-            s -= num.exp(slope)
-        fx.append(fs)
-    return i/2., -s, num.sort(num.hstack(fx))
-
-
 #def spectral_ratio(couple):
 #    '''Ratio of two overlapping spectra.
 #
@@ -794,25 +785,64 @@ def spectral_ratio(couple):
 #    else:
 #        cfmin = None
 #        cfmax = None
-#
-#    a_s = []
-#    f_s = []
+#    dis = None
 #    for tr, fxfy in couple.spectra.spectra:
+#        if dis is None:
+#            dis = tr.source.distance_to(tr.target)
+#        else:
+#            assert tr.source.distance_to(tr.target) < dis
+#
 #        fs, a = fxfy
-#        if cfmin is not None and cfmax is not None:
+#        if cfmin and cfmax:
 #            fmin = cfmin
 #            fmax = cfmax
 #        else:
 #            fmin = max(tr.fmin, fs.min())
 #            fmax = min(tr.fmax, fs.max())
 #        ind = limited_frequencies_ind(fmin, fmax, fs)
-#        a_s.append(a[ind])
-#        f_s.append(fs[ind])
-#        fx.append(fs[ind])
-#
-#    aratio = a_s[1]/a_s[0]
-#    slope, interc, r, p, std = linregress(fs[ind], num.log(aratio))
-#    return interc, slope, num.sort(num.hstack(fx))
+#        slope, interc, r, p, std = linregress(fs[ind], num.log(a[ind]))
+#        if not s:
+#            i = interc
+#            s = slope
+#            #s = num.exp(slope)
+#        else:
+#            i += interc
+#            s -= slope
+#            #s -= num.exp(slope)
+#        fx.append(fs)
+#    print 'TODO: rethink this method'
+#    return i/2., -s, num.sort(num.hstack(fx)), r, p, std
+
+def spectral_ratio(couple):
+    '''Ratio of two overlapping spectra.
+
+    The alternative method.
+
+    i is the mean intercept.
+    s is the slope ratio of each individual linregression.'''
+    assert len(couple.spectra.spectra)==2, '%s spectra found: %s' % (len(couple.spectra.spectra), couple.spectra.spectra)
+    
+    if couple.use_common:
+        cfmin, cfmax = couple.frequency_range_work()
+    else:
+        raise Exception("deprecated")
+        cfmin = None
+        cfmax = None
+
+    both_f = couple.spectra.combined_freqs()
+    indx = num.where(num.logical_and(both_f>=cfmin, both_f<=cfmax))
+    f_use = both_f[indx]
+    a_s = num.empty((2, len(f_use)))
+    i = 0
+    for tr, fxfy in couple.spectra.spectra:
+        fx, fy = fxfy
+        f = interpolate.interp1d(fx, fy)
+        a_s[i][:] = f(f_use)
+        i += 1
+
+    slope, interc, r, p, std = linregress(f_use, num.log(a_s[0]/a_s[1]))
+
+    return interc, slope, f_use, a_s, r, p, std
 
 
 
@@ -844,10 +874,10 @@ class QInverter:
             else:
                 logger.info('higher than cc threshold. ')
             pb.update(i_c+1)
-            interc, slope, fx, r, p, std = spectral_ratio(couple)
+            interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
             dt = couple.delta_onset()
-            #Q = num.pi*dt/slope
-            Q = num.pi/slope
+            Q = num.pi*dt/slope
+            #Q = num.pi/slope
             if num.isnan(Q):
                 logger.warn('Q is nan')
                 continue
@@ -887,11 +917,29 @@ class QInverter:
             ax.axvline(want_q, color='r')
         return
 
+    def analyze_selected_couples(self, couples, indx, indxinvert):
+        fig = plt.gcf()
+        ax = fig.add_subplot(221)
+        for i in indx[0]:
+            c = couples[i]
+            for tr, fxfy in c.spectra.spectra:
+                fs, a = fxfy
+                ax.plot(fs, a, alpha=0.1, linewidth=0.1, color='blue')
+
+        ax = fig.add_subplot(222)
+        for i in indxinvert[0]:
+            c = couples[i]
+            for tr, fxfy in c.spectra.spectra:
+                fs, a = fxfy
+                ax.plot(fs, a, alpha=0.05, linewidth=0.1, color='red')
+        
+        ax = fig.add_subplot(223)
+        
+        ax = fig.add_subplot(224)
+        
     def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
         couples_with_data = filter(lambda x: x.invert_data is not None,
                                    self.couples)
-        #std_max = 0.002
-        std_max = None
         n = len(couples_with_data)
         Qs = num.empty(n)
         mags = num.empty(n)
@@ -902,11 +950,16 @@ class QInverter:
         rs = num.empty(n)
         ps = num.empty(n)
         stds = num.empty(n)
+        dts = num.empty(n)
+        fwidth = num.empty(n)
         by_target = {}
+        target_combis = []
         for ic, c in enumerate(couples_with_data):
             dt, fx, slope, interc, Q, r, p, std = c.invert_data
+            fwidth[ic] = num.max(fx)-num.min(fx)
             rs[ic] = r**2
             ps[ic] = num.log(p)
+            dts[ic] = dt
             stds[ic] = std
             Qs[ic] = Q
             cc[ic] = c.cc_coef()
@@ -916,10 +969,13 @@ class QInverter:
             d_passing[ic] = c.ray[4]
             magdiff = abs(c.master_slave[0].source.magnitude-c.master_slave[1].source.magnitude)
             magdiffs[ic] = magdiff
+            tr1, tr2 = c.master_slave
+            key = '%s-%s' % (tr1.target.codes[1], tr2.target.codes[1])
+            target_combis.append(key)
             try:
-                by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ].append(Q)
+                by_target[key].append(Q)
             except KeyError:
-                by_target['%s-%s'%(c.master_slave[0].target.codes[1], c.master_slave[1].target.codes[1]) ] = [Q]
+                by_target[key] = [Q]
         
         results = {'Q': Qs,
                    'mean mag': mags,
@@ -929,21 +985,26 @@ class QInverter:
                    'd_pass': d_passing,
                    'r2-value': rs,
                    'log(p-value)': ps,
-                   'std': stds, }
+                   'std': stds,
+                   'dts': dts,
+                   'fwidth': fwidth,
+                   }
         selector_min = None
         selector_max = None
         #selector = "std"
         #selector_max = 0.005
         selector = "r2-value"
-        #selector_min = 0.75
-        selector_min = 0.90
+        selector_min = 0.75
+        #selector = "Q"
+        #selector_max = 0.
+        #selector_min = 0.90
         if selector is not None:
             if selector_max is not None:
                 indx = num.where(results[selector]<=selector_max)
                 indxinvert = num.where(results[selector]>selector_max)
             elif selector_min is not None:
-                indx = num.where(results[selector]<=selector_min)
-                indxinvert = num.where(results[selector]>selector_min)
+                indx = num.where(results[selector]>=selector_min)
+                indxinvert = num.where(results[selector]<selector_min)
         else:
             indx = None
             indxinvert = num.where(False)
@@ -971,21 +1032,33 @@ class QInverter:
             ax.set_xlabel(wantx)
             ax.set_ylabel(wanty)
         ax = fig.add_subplot(nrows, ncols, icomb+2)
-        ax.hist(results["Q"][indx], bins=30)
+        ax.hist(results["Q"][indx], bins=30, color='blue')
+        median = num.median(results["Q"][indx])
+        txt ='median: %1.4f\n$\sigma$: %1.5f' % (
+            median, num.std(results["Q"][indx]))
+        ax.text(0.01, 0.99, txt, size=6, transform=ax.transAxes,
+                verticalalignment='top')
+
+        ax.axvline(median, color='black')
 
         plt.tight_layout()
         fig.savefig(fnout_prefix + "_qvs.png", dpi=200)
         
+        fig = plt.figure()
+        self.analyze_selected_couples(couples_with_data, indx, indxinvert)#
+        plt.tight_layout()
+        fig.savefig(fnout_prefix + "_spectra.png", dpi=200)
+
+        fig = plt.figure(figsize=(10, 10))
         nrow = 3
         ncolumns = int(len(by_target)/nrow)+1
-        fig = plt.figure(figsize=(10, 10))
         i = 1
         q_threshold = 2000
         for k, v in by_target.items():
             if len(v)<3:
                 continue
             ax = fig.add_subplot(nrow, ncolumns, i)
-            ax.hist(filter(lambda x: x<=q_threshold, v), bins=20)
+            ax.hist(filter(lambda x: x<=q_threshold, v), bins=20, color='blue')
             ax.set_title(k)
             i += 1
         
@@ -1785,7 +1858,7 @@ def apply_webnet():
         else:
             pair = [tracer1, tracer2]
             testcouple = SyntheticCouple(master_slave=pair,
-                                         method=method)
+                                         method=method, use_common=use_common)
             testcouple.ray = r
             testcouple.filters = filters
             testcouples.append(testcouple)
