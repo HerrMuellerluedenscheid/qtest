@@ -426,6 +426,9 @@ class Tracer:
         self.trace = self._apply_transfer(self.trace)
         if self.target.filter:
             self.trace = self.simulate(self.trace)
+
+        self.chopper.chop(self.source, self.target, self.trace,
+                                          inplace=True)
         #self.traces = rotate_rtz(self.traces)
         self.config = self.engine.get_store_config(self.target.store_id)
         return True
