@@ -354,6 +354,7 @@ class Tracer:
         self.fmax = kwargs.pop('fmax', 99999.)
 
         self._apply_transfer = self.prepare_quantity(self.want)
+        self.engine = None
 
     def prepare_quantity(self, want):
         if want == 'velocity':
@@ -372,8 +373,7 @@ class Tracer:
             self.trace = trs[0]
 
     def setup_data(self, *args, **kwargs):
-        engine = kwargs.get('engine', None)
-        self.setup_from_engine(engine)
+        self.setup_from_engine()
         if self.trace is not None:
             #self.process()
             return self.trace
@@ -409,9 +409,9 @@ class Tracer:
     def simulate(self, tr):
         return tr.transfer(transfer_function=self.target.filter.response)
 
-    def setup_from_engine(self, engine):
+    def setup_from_engine(self):
         try:
-            response = engine.process(sources=[self.source], targets=[self.target])
+            response = self.engine.process(sources=[self.source], targets=[self.target])
         except OutOfBounds as e:
             self.trace = "OutOfBounds"
             self.processed = self.trace
@@ -427,7 +427,7 @@ class Tracer:
         if self.target.filter:
             self.trace = self.simulate(self.trace)
         #self.traces = rotate_rtz(self.traces)
-        self.config = engine.get_store_config(self.target.store_id)
+        self.config = self.engine.get_store_config(self.target.store_id)
         return True
 
     def post_process(self, tr, normalize=False, response=False, noise=False):
@@ -467,6 +467,10 @@ class Tracer:
         else:
             l = "%s-%s" % (self.source.time, ".".join(self.target.codes))
         return l
+
+    def drop_data(self):
+        self.trace = None
+        self.processed = None
 
 
 class QSeisTraces(Tracer):
@@ -566,10 +570,6 @@ class DataTracer(Tracer):
 
     def label(self):
         return '%s/%s' % (util.time_to_str(self.source.time), ".".join(self.target.codes))
-
-    def drop_data(self):
-        self.trace = None
-        self.processed = None
 
 
 class Chopper():
