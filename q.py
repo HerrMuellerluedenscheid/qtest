@@ -1044,10 +1044,15 @@ class QInverter:
                 color = indx_style["markerfacecolor"]
             else:
                 color = invert_indx_style["markerfacecolor"]
-            axs[key].plot(tr1.get_xdata(), tr1.get_ydata(), color=color)
-            axs[key].plot(tr2.get_xdata(), tr2.get_ydata(), color=color)
+            axs[key].plot(tr1.get_xdata(), tr1.get_ydata(), color=color,
+                          alpha=0.5, linewidth=0.2)
+            axs[key].plot(tr2.get_xdata(), tr2.get_ydata(), color=color,
+                          alpha=0.5, linewidth=0.2)
 
-        fig.savefig(fnout_prefix + "_traces.png")
+        for k, ax in axs.items():
+            ax.set_title(k)
+
+        fig.savefig(fnout_prefix + "_traces.png", dpi=240)
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     cmap = mpl.cm.get_cmap(cmap)
