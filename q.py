@@ -837,10 +837,10 @@ class QInverter:
 
     def analyze_selected_couples(self, couples, indx, indxinvert):
         fig = plt.gcf()
-        ax1 = fig.add_subplot(221)
-        ax2 = fig.add_subplot(222)
-        ax3 = fig.add_subplot(223)
-        ax4 = fig.add_subplot(224)
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+        #ax3 = fig.add_subplot(223)
+        #ax4 = fig.add_subplot(224)
 
         for i in indx[0]:
             c = couples[i]
@@ -851,7 +851,7 @@ class QInverter:
 
             for i in xrange(1):
                 ax1.plot(freqs[i], amps[i], alpha=0.1, linewidth=0.1, color='blue')
-            ax3.plot(freqsi, ampsi[0]/ampsi[1], alpha=0.1, linewidth=0.1, color='blue')
+            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.1, linewidth=0.1, color='blue')
 
         for i in indxinvert[0]:
             c = couples[i]
@@ -861,12 +861,12 @@ class QInverter:
             freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
 
             for i in xrange(1):
-                ax2.plot(freqs[i], amps[i], alpha=0.05, linewidth=0.1, color='red')
-            ax4.plot(freqsi, ampsi[0]/ampsi[1], alpha=0.1, linewidth=0.1, color='blue')
+                ax1.plot(freqs[i], amps[i], alpha=0.05, linewidth=0.1, color='red')
+            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.1, linewidth=0.1, color='red')
 
-        for ax in [ax1, ax2, ax3, ax4]:
-            ax.set_xscale('log')
-            ax.set_yscale('log')
+        #for ax in [ax1, ax2, ax3, ax4]:
+        ax1.set_xscale('log')
+        ax1.set_yscale('log')
 
 
     def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
@@ -941,9 +941,14 @@ class QInverter:
             indx = None
             indxinvert = num.where(False)
 
-        markersize = 0.5
-        invert_indx_style = {'marker': 'o', 'markerfacecolor': 'black', 
-                             'alpha': 0.5, 'markersize': markersize,
+        markersize = 1.
+        alpha = 0.5
+        indx_style = {'marker': 'o', 'markerfacecolor': 'blue', 
+                             'alpha': alpha, 'markersize': markersize,
+                             'linestyle': 'None'}
+
+        invert_indx_style = {'marker': 'o', 'markerfacecolor': 'red', 
+                             'alpha': alpha, 'markersize': markersize,
                              'linestyle': 'None'}
 
         fig = plt.figure(figsize=(16, 14))
@@ -955,16 +960,19 @@ class QInverter:
                 combinations.append((k1, k2))
         nrows = num.ceil(num.sqrt(len(combinations)+1))
         ncols = int(num.ceil(float(len(combinations)+1)/nrows))
-        
+
         for icomb, combination in enumerate(combinations):
             wanty, wantx = combination
             ax = fig.add_subplot(nrows, ncols, icomb+1)
-            ax.plot(results[wantx][indx], results[wanty][indx], 'bo', markersize=markersize)
+            ax.plot(results[wantx][indx], results[wanty][indx], **indx_style)
             ax.plot(results[wantx][indxinvert], results[wanty][indxinvert], **invert_indx_style)
             ax.set_xlabel(wantx)
             ax.set_ylabel(wanty)
         ax = fig.add_subplot(nrows, ncols, icomb+2)
-        ax.hist(results["Q"][indx], bins=30, color='blue')
+        ax.hist(results["Q"][indx], bins=30,
+                color=indx_style["markerfacecolor"], alpha=alpha)
+        ax.hist(results["Q"][indxinvert], bins=30,
+                color=invert_indx_style["markerfacecolor"], alpha=alpha)
         median = num.median(results["Q"][indx])
         txt ='median: %1.4f\n$\sigma$: %1.5f' % (
             median, num.std(results["Q"][indx]))
@@ -1518,14 +1526,16 @@ def dbtest(noise_level=0.0000000000000000005):
             pair.append(tracer1)
             tracers.extend(pair)
             pairs.append(pair)
-        testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
-        testcouple.ray = p
-        testcouple.filters = filters
-        #testcouple.process(noise=noise)
-        #if len(testcouple.spectra.spectra)!=2:
-        #   logger.warn('not 2 spectra in test couple!!!! why?')
-        #   continue
-        testcouples.append(testcouple)
+
+        if len(pair)==2:
+            testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+            testcouple.ray = p
+            testcouple.filters = filters
+            #testcouple.process(noise=noise)
+            #if len(testcouple.spectra.spectra)!=2:
+            #   logger.warn('not 2 spectra in test couple!!!! why?')
+            #   continue
+            testcouples.append(testcouple)
     if len(tracers)==0:
         raise Exception('no tracers survived the assessment')
 
@@ -1763,22 +1773,8 @@ def apply_webnet():
 
 
 if __name__=='__main__':
-    #invert_test_1()
-    #qpqs()
 
-    # DIESER:
-    #invert_test_2()
-    #invert_test_2D(noise_level=0.0000001)
     #invert_test_2D_parallel(noise_level=0.1)
     dbtest()
     #apply_webnet()
     plt.show()
-    #noise_test()
-    #qp_model_test()
-    #constant_qp_test()
-    #sdr_test()
-    #vp_model_test()
-
-__all__ = '''
-DCSourceWid
-'''.split()
