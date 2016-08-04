@@ -4,16 +4,16 @@ mpl.rc('ytick', labelsize=10)
 mpl.rc('xtick', labelsize=10)
 import matplotlib.pyplot as plt
 plt.style.use('ggplot')
-
-import copy
+import numpy as num
+import os
+import glob
 import progressbar
-from pyrocko.gf import meta, DCSource, RectangularSource, Target, LocalEngine
-from pyrocko.gf import SourceWithMagnitude, OutOfBounds#, CircularSource
-from pyrocko.guts import String, Float, Int
+import logging
+from pyrocko.gf import meta, Target, LocalEngine
 from pyrocko import orthodrome
 from pyrocko.gui_util import PhaseMarker
 from pyrocko import util
-from pyrocko import cake, model, cake_plot
+from pyrocko import cake, model
 from pyrocko import pile
 from pyrocko import moment_tensor
 from pyrocko.fomosto import qseis
@@ -23,18 +23,13 @@ from collections import defaultdict
 from scipy.stats import linregress
 from scipy.optimize import curve_fit
 from scipy import signal, interpolate
-import numpy as num
-import os
-import glob
-from micro_engine import DataTracer, Tracer, Builder#, Brunes
-from micro_engine import Noise, RandomNoise, RandomNoiseConstantLevel, Chopper, DDContainer
-from micro_engine import associate_responses, TTPerturbation, UniformTTPerturbation
+from micro_engine import DataTracer, Tracer, Builder
+from micro_engine import Noise, Chopper, DDContainer
+from micro_engine import associate_responses, UniformTTPerturbation
 from autogain.autogain import PhasePie, PickPie
-from brune import Brune
-import logging
 from distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
-from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude, M02tr
-from util import e2extendeds, e2s, s2t, e2linesource
+from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
+from util import e2extendeds, e2s, s2t
 
 
 logging.basicConfig(level=logging.INFO)
