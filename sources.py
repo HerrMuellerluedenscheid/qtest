@@ -66,3 +66,6 @@ class LineSource(DCSource):
         return ds
 
 
+__all__ = '''
+DCSourceWid
+'''.split()
