@@ -843,7 +843,7 @@ class QInverter:
         #ax3 = fig.add_subplot(223)
         #ax4 = fig.add_subplot(224)
 
-        for i in indx[0]:
+        for i in indx:
             c = couples[i]
             freqs = c.spectra.freqs()
             amps = c.spectra.amps()
@@ -854,7 +854,7 @@ class QInverter:
                 ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='blue')
             ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='blue')
 
-        for i in indxinvert[0]:
+        for i in indxinvert:
             c = couples[i]
             freqs = c.spectra.freqs()
             amps = c.spectra.amps()
@@ -926,21 +926,34 @@ class QInverter:
         selector_max = None
         #selector = "std"
         #selector_max = 0.005
-        selector = "r2-value"
-        selector_min = 0.75
+        #selector = "r2-value"
+        #selector_min = 0.75
         #selector = "Q"
         #selector_max = 0.
         #selector_min = 0.90
-        if selector is not None:
-            if selector_max is not None:
-                indx = num.where(results[selector]<=selector_max)
-                indxinvert = num.where(results[selector]>selector_max)
-            elif selector_min is not None:
-                indx = num.where(results[selector]>=selector_min)
-                indxinvert = num.where(results[selector]<selector_min)
+        selectors = [
+            ("r2-value", 0.8, None),
+            #("magdiff", None,  0.3),
+            #("cc", 0.9, None),
+        ]
+        indxall = num.arange(len(couples_with_data)) 
+        indx = indxall
+        #indxinvert = num.arange(len(couples_with_data))
+
+        for selector, selector_min, selector_max in selectors:
+            if selector is not None:
+                if selector_max is not None:
+                    indx_tmp = num.where(results[selector]<=selector_max)
+                    indx = num.intersect1d(indx, indx_tmp[0])
+
+                if selector_min is not None:
+                    indx_tmp = num.where(results[selector]>=selector_min)
+                    indx = num.intersect1d(indx, indx_tmp[0])
+        print indx==indxall
+        if indx==indxall:
+            indxinvert = num.empty(0, dtype=num.int)
         else:
-            indx = None
-            indxinvert = num.where(False)
+            indxinvert = num.setdiff1d(indxall, indx)
 
         markersize = 1.
         alpha = 0.8
@@ -949,7 +962,7 @@ class QInverter:
                              'linestyle': 'None'}
 
         invert_indx_style = {'marker': 'o', 'markerfacecolor': 'red', 
-                             'alpha': alpha, 'markersize': markersize,
+                             'alpha': alpha-0.1, 'markersize': markersize,
                              'linestyle': 'None'}
 
         fig = plt.figure(figsize=(16, 14))
@@ -968,8 +981,8 @@ class QInverter:
             ax = fig.add_subplot(nrows, ncols, icomb+1)
             ax.plot(results[wantx][indx], results[wanty][indx], **indx_style)
             ax.plot(results[wantx][indxinvert], results[wanty][indxinvert], **invert_indx_style)
-            ax.set_xlabel(wantx)
-            ax.set_ylabel(wanty)
+            ax.set_xlabel(wantx, fontsize=8)
+            ax.set_ylabel(wanty, fontsize=8)
         ax = fig.add_subplot(nrows, ncols, icomb+2)
         ax.hist(results["Q"][indx], bins=30,
                 color=indx_style["markerfacecolor"], alpha=alpha)
@@ -1000,8 +1013,6 @@ class QInverter:
         target_combis_indxinvert = []
         want_hists_indx = {}
         want_hists_indxinvert = {}
-        indx = indx[0]
-        indxinvert = indxinvert[0]
         for i, target_combi in enumerate(target_combis):
             if target_combi not in want_hists_indx:
                 want_hists_indx[target_combi] = []
