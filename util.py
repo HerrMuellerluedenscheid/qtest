@@ -24,10 +24,26 @@ def M02tr(Mo, stress, vr):
     return tr
 
 
-def fmin_by_magnitude(magnitude, stress=0.1, vr=3500):
+def radius2fc(r, k=0.32, beta=3500):
+    # Source parameters of the swarm earthquakes in West Bohemia/Vogtland,
+    # Michalek
+    # k = 0.32 (Madariaga, also in Michaleks paper)
+    # beta = 3500 (Michaleks paper)
+    fc = k*beta/r
+    return fc
+
+def fmin_by_magnitude(magnitude, stress=10., vr=3500):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
-    duration = M02tr(Mo, stress, vr)
-    return 1./duration
+    #duration = M02tr(Mo, stress, vr)
+    #print duration
+    #return 1./duration
+    # 
+    # Source parameters of the swarm earthquakes in West Bohemia/Vogtland,
+    # Michalek:
+    r = 0.155 * Mo** 0.206
+    return radius2fc(r)
+    #print Mo, r
+    #return r
 
 
 def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
@@ -176,16 +192,18 @@ def get_stf(magnitude=0, stress=0.1, vr=2750., type=None):
     else:
         raise Exception('unknown STF type: %s' % type)
     return stf
-  
+
 
 class Magnitude2fmin():
-    def __init__(self, stress, vr, lim):
+    def __init__(self, stress, vr, lim, fcoffset=5):
+        self.fcoffset = fcoffset
         self.stress = stress
         self.vr = vr
         self.lim = lim
 
     def __call__(self, magnitude):
-        return max(fmin_by_magnitude(magnitude, self.stress, self.vr), self.lim)
+        return max(fmin_by_magnitude(magnitude, self.stress, self.vr),
+                   self.lim) + self.fcoffset
 
     @classmethod
     def setup(cls, stress=0.1, vr=2750, lim=0.):
