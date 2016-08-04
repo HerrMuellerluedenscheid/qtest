@@ -337,7 +337,7 @@ def spectralize(tr, method='mtspec', **kwargs):
 
         for filt in filters:
             tr_work = tr.copy(data=True)
-            tr_work.taper(_taperer, inplace=True, chop=False)
+            #tr_work.taper(_taperer, inplace=True, chop=False)
             tr_work.set_codes(network=str(filt))
             fcenter, fwidth = filt
             apply_filter(tr_work, 4, fcenter-fwidth/2., fcenter+fwidth/2.)
@@ -345,7 +345,7 @@ def spectralize(tr, method='mtspec', **kwargs):
             #tr_work.lowpass(4, fcenter+fwidth/2.)
 
             # post taper to avoid misinterpretation of dc offset
-            tr_work.taper(_taperer, inplace=True, chop=False)
+            #tr_work.taper(_taperer, inplace=True, chop=False)
             f.append(fcenter)
             a.append(num.max(num.abs(tr_work.get_ydata())))
             if do_plot:
@@ -851,8 +851,8 @@ class QInverter:
             freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
 
             for i in xrange(1):
-                ax1.plot(freqs[i], amps[i], alpha=0.1, linewidth=0.1, color='blue')
-            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.1, linewidth=0.1, color='blue')
+                ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='blue')
+            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='blue')
 
         for i in indxinvert[0]:
             c = couples[i]
@@ -862,8 +862,8 @@ class QInverter:
             freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
 
             for i in xrange(1):
-                ax1.plot(freqs[i], amps[i], alpha=0.05, linewidth=0.1, color='red')
-            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.1, linewidth=0.1, color='red')
+                ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='red')
+            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='red')
 
         #for ax in [ax1, ax2, ax3, ax4]:
         ax1.set_xscale('log')
@@ -959,7 +959,7 @@ class QInverter:
             k1 = keys.pop()
             for k2 in keys:
                 combinations.append((k1, k2))
-        
+
         nrows = num.ceil(num.sqrt(len(combinations)+1))
         ncols = int(num.ceil(float(len(combinations)+1)/nrows))
 
@@ -985,7 +985,7 @@ class QInverter:
 
         plt.tight_layout()
         fig.savefig(fnout_prefix + "_qvs.png", dpi=200)
-        
+
         fig = plt.figure()
         self.analyze_selected_couples(couples_with_data, indx, indxinvert)
         plt.tight_layout()
@@ -1007,7 +1007,7 @@ class QInverter:
                 want_hists_indx[target_combi] = []
             if target_combi not in want_hists_indxinvert:
                 want_hists_indxinvert[target_combi] = []
-            
+
             if i in indx:
                 want_hists_indx[target_combi].append(results["Q"][i])
             elif i in indxinvert:
@@ -1017,26 +1017,37 @@ class QInverter:
         all_combis = list(set(target_combis)) 
         n_want = len(all_combis)
         nrows = int(num.ceil(num.sqrt(n_want+1)))
-        ncols = int(num.ceil(float(n_want+1)/nrows))
+        ncols = int(num.ceil(float(n_want)/nrows))
         fig, axs = plt.subplots(nrows, ncols, sharex=True, sharey=True)
         axs = dict(zip(all_combis, flatten_list(axs)))
         for k, v in want_hists_indx.items():
             axs[k].hist(v, color=indx_style["markerfacecolor"], alpha=alpha)
+            axs[k].set_title(k)
 
         for k, v in want_hists_indxinvert.items():
             axs[k].hist(v, color=invert_indx_style["markerfacecolor"], alpha=alpha)
+            axs[k].set_title(k)
 
-        #for k, v in by_target.items():
-        #    if len(v)<3:
-        #        continue
-        #    ax = fig.add_subplot(nrow, ncolumns, i)
-        #    ax.hist(filter(lambda x: x<=q_threshold, v), bins=20, color='blue')
-        #    ax.set_title(k)
-        #    i += 1
-        #
-        #plt.tight_layout()
         fig.savefig(fnout_prefix + "_bytarget.png")
 
+        fig, axs = plt.subplots(nrows, ncols, sharex=True, sharey=True)
+        axs = dict(zip(all_combis, flatten_list(axs)))
+        for i, c in enumerate(couples_with_data):
+            tracer1, tracer2 = c.master_slave
+            key = '%s-%s' % (tracer1.target.codes[1], tracer2.target.codes[1])
+            tr1 = tracer1.setup_data()
+            tr2 = tracer2.setup_data()
+
+            tr1.shift(-tr1.tmin)
+            tr2.shift(-tr2.tmin)
+            if i in indx:
+                color = indx_style["markerfacecolor"]
+            else:
+                color = invert_indx_style["markerfacecolor"]
+            axs[key].plot(tr1.get_xdata(), tr1.get_ydata(), color=color)
+            axs[key].plot(tr2.get_xdata(), tr2.get_ydata(), color=color)
+
+        fig.savefig(fnout_prefix + "_traces.png")
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     cmap = mpl.cm.get_cmap(cmap)
