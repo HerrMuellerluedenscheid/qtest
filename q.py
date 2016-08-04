@@ -34,12 +34,8 @@ from brune import Brune
 import logging
 from distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
 from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude, M02tr
-from rupture_size import radius as source_radius
-try:
-    from pyrocko.gf import BoxcarSTF, TriangularSTF, HalfSinusoidSTF
-except ImportError as e:
-    print 'CHANGE BRANCHES'
-    raise e
+from util import e2extendeds, e2s, s2t, e2linesource
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
@@ -189,86 +185,6 @@ def extract(fxfy, upper_lim=0., lower_lim=99999.):
     indx = num.where(num.logical_and(fxfy[0]>=upper_lim, fxfy[0]<=lower_lim))
     indx = num.array(indx)
     return fxfy[:, indx].reshape(2, len(indx.T))
-
-
-def get_stf(magnitude=0, stress=0.1, vr=2750., type=None):
-    Mo = moment_tensor.magnitude_to_moment(magnitude)
-    duration = M02tr(Mo, stress, vr)
-    print 'CHECK THE DURATION: %s' % duration
-    if type==None:
-        stf = None
-    elif type=='boxcar':
-        stf = BoxcarSTF(duration=duration)
-    elif type=='triangular':
-        stf = TriangularSTF(duration=duration)
-    elif type=='halfsin':
-        stf = HalfSinusoidSTF(duration=duration)
-    elif type=='brunes':
-        stf = None
-    else:
-        raise Exception('unknown STF type: %s' % type)
-    return stf
-
-
-class RectangularBrunesSource(RectangularSource):
-    brunes = Brune.T(optional=True, default=None)
-    def __init__(self, **kwargs):
-        RectangularSource.__init__(self, **kwargs)
-        #self.stf = get_stf(self.magnitude)
-        #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-
-#class CircularBrunesSource(CircularSource):
-#    brunes = Brune.T(optional=True, default=None)
-#    def __init__(self, **kwargs):
-#        CircularSource.__init__(self, **kwargs)
-#        #self.stf = get_stf(self.magnitude)
-#        #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-
-
-class DCSourceWid(DCSource):
-    id = String.T(optional=True, default=None)
-    brunes = Brune.T(optional=True, default=None)
-    def __init__(self, **kwargs):
-        DCSource.__init__(self, **kwargs)
-        #self.stf = get_stf(self.magnitude)
-        #print 'check if STF was applied!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-
-
-class LineSource(DCSource):
-    discretized_source_class = meta.DiscretizedMTSource
-    i_sources = Int.T()
-    velocity = Float.T()
-    brunes = Brune.T(optional=True, default=None)
-
-    def base_key(self):
-        return DCSource.base_key(self)+(self.i_sources, self.velocity)
-
-    def discretize_basesource(self, store):
-
-        c = store.config
-        dz = c.source_depth_delta
-
-        #i_sources sollte eher i_sources/2. sein!
-        north_shifts = num.arange(-dz*self.i_sources, dz*self.i_sources, dz)
-        print 'line_source_points ', north_shifts
-
-        times = num.ones(len(north_shifts)) * (north_shifts[-1]-north_shifts[0])/self.velocity
-        n = times.size
-
-        mot = moment_tensor.MomentTensor(strike=self.strike, dip=self.dip, rake=self.rake,
-                                                            scalar_moment=1.0/n)
-        amplitudes = num.ones(n)/n
-        m6s = num.repeat(mot.m6()[num.newaxis, :], n, axis=0)
-        m6s[:, :] *= amplitudes[:, num.newaxis]
-        ds = meta.DiscretizedMTSource(
-            lat=self.lat,
-            lon=self.lon,
-            times=times,
-            north_shifts=self.north_shift + north_shifts,
-            east_shifts=self.east_shift,
-            depths=self.depth,
-            m6s=m6s)
-        return ds
 
 
 def exp_fit(x, y, m):
@@ -1125,7 +1041,6 @@ def location_plots(tracers, colors=None, background_model=None, parameter='qp'):
     ax.invert_yaxis()
 
 
-
 def process_couple(args):
     testcouple, n_repeat, noise = args
     testcouple.process(repeat=n_repeat, noise=noise)
@@ -1297,7 +1212,6 @@ def invert_test_2D_parallel(noise_level=0.001):
     plt.show()
 
 
-
 def plot_response(response, ax=None):
     if ax==None:
         fig = plt.figure()
@@ -1313,7 +1227,6 @@ def plot_response(response, ax=None):
 def wanted_q(mod, z):
     q = mod.layer(z).material(z).qp
     return q
-
 
 
 def dbtest(noise_level=0.0000000000000000005):
@@ -1664,105 +1577,6 @@ def reset_events(markers, events):
         marks = filter(lambda x: x.get_event_time()==e.time, markers)
         map(lambda x: x.set_event(e), marks)
 
-def s2t(s, channel='Z', store_id=None):
-    return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation,
-                  codes=(s.network, s.station, s.location, channel), store_id=store_id)
-
-
-def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
-    if e.moment_tensor:
-        mt = e.moment_tensor
-        mag = mt.magnitude
-        s, d, r = mt.both_strike_dip_rake()[0]
-    else:
-        mt = False
-        mag = e.magnitude
-        s, d, r = None, None, None
-
-    a = source_radius([mag])
-    if nucleation_radius is not None:
-        nucleation_x, nucleation_y = (num.random.random(2)-0.5)*2.*nucleation_radius
-        nucleation_x = float(nucleation_x)
-        nucleation_y = float(nucleation_y)
-    else:
-        nucleation_x, nucleation_y = None, None
-    velocity = 3500.
-    if stf_type=='brunes':
-        # mu nachschauen!
-        # beta aus Modell
-        brunes = Brune(sigma=2.9E6, mu=3E10, beta=velocity)
-    else:
-        brunes = None
-
-    stf = get_stf(mag, type=stf_type)
-    return RectangularBrunesSource(
-       lat=float(e.lat), lon=float(e.lon), depth=float(e.depth), north_shift=float(north_shift),
-       east_shift=float(east_shift), time=float(e.time), width=float(a[0]), length=float(a[0]),
-       strike=float(s), dip=float(d), rake=float(r), magnitude=float(mag), brunes=brunes,
-        velocity=float(velocity),
-       nucleation_x=float(nucleation_x), nucleation_y=float(nucleation_y), stf=stf)
-    #return RectangularSource(
-    #   lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
-    #   east_shift=east_shift, time=e.time, width=float(a[0]), length=float(a[0]),
-    #   strike=mt.strike1, dip=mt.dip1, rake=mt.rake1, magnitude=mag,
-    #   nucleation_x=nucleation_x, nucleation_y=nucleation_y, stf=stf)
-
-
-#def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
-#    if e.moment_tensor:
-#        mt = e.moment_tensor
-#        mag = mt.magnitude
-#    else:
-#        mt = False
-#        mag = e.magnitude
-#    a = source_radius([mag])
-#    #d = num.sqrt(a[0])
-#    print 'magnitude: ', mag
-#    print 'source radius: ', a
-#    if nucleation_radius is not None:
-#        nucleation_x, nucleation_y = (num.random.random(2)-0.5)*2.*nucleation_radius
-#        nucleation_x = float(nucleation_x)
-#        nucleation_y = float(nucleation_y)
-#    else:
-#        nucleation_x, nucleation_y = None, None
-#    #nucleation_x = 0.95
-#    #nucleation_y = 0.
-#    stf = get_stf(mag, type=stf_type)
-#    print nucleation_x, nucleation_y
-#    print mt.strike1, mt.strike2
-#    print mt.dip1, mt.dip2
-#    print mt.rake1, mt.rake2
-#    print '.'*80
-#    return CircularBrunesSource(
-#       lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
-#       east_shift=east_shift, time=e.time, radius=float(a[0]),
-#       strike=mt.strike1, dip=mt.dip1, rake=mt.rake1, magnitude=mag,
-#       nucleation_x=nucleation_x, nucleation_y=nucleation_y, stf=stf)
-
-
-def e2s(e, north_shift=0., east_shift=0., stf_type=None):
-    if e.moment_tensor:
-        mt = e.moment_tensor
-        mag = mt.magnitude
-    else:
-        mt = False
-        mag = e.magnitude
-
-    stf = get_stf(mag, type=stf_type)
-    if stf_type=='brunes':
-        # mu nachschauen!
-        # beta aus Modell
-        velocity = 3500.
-        brunes = Brune(sigma=2.9E6, mu=3E10, beta=velocity)
-    else:
-        brunes = None
-    s = DCSourceWid.from_pyrocko_event(e)
-    s.brunes = brunes
-    s.north_shift = north_shift
-    s.east_shift = east_shift
-    s.magnitude = mag
-    s.stf = stf
-    return s
 
 def paired_sources_dict(paired_sources):
     paired_source_dict = {}
@@ -1951,34 +1765,6 @@ def apply_webnet():
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #couples = inverter.couples
     inverter.analyze()
-
-
-
-def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
-    if e.moment_tensor:
-        mt = e.moment_tensor
-        mag = mt.magnitude
-        s, d, r = mt.both_strike_dip_rake()[0]
-    else:
-        mt = False
-        mag = e.magnitude
-        s, d, r = None, None, None
-
-    #a = source_radius([mag])
-    #d = num.sqrt(a[0])
-    velocity = 3500.
-    if stf_type=='brunes':
-        brunes = Brune(sigma=2.9E6, mu=3E10, beta=velocity)
-    else:
-        brunes = None
-
-    stf = get_stf(mag, type=stf_type)
-    return LineSource(
-       lat=float(e.lat), lon=float(e.lon), depth=float(e.depth), north_shift=float(north_shift),
-       east_shift=float(east_shift), time=float(e.time), i_sources=10,
-       strike=float(s), dip=float(d), rake=float(r), magnitude=float(mag), brunes=brunes,
-        velocity=velocity, stf=stf)
-
 
 
 if __name__=='__main__':
