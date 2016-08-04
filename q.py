@@ -30,6 +30,7 @@ from autogain.autogain import PhasePie, PickPie
 from distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
 from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
 from util import e2extendeds, e2s, s2t
+from sources import DCSourceWid
 
 
 logging.basicConfig(level=logging.INFO)
@@ -942,7 +943,7 @@ class QInverter:
             indxinvert = num.where(False)
 
         markersize = 1.
-        alpha = 0.5
+        alpha = 0.8
         indx_style = {'marker': 'o', 'markerfacecolor': 'blue', 
                              'alpha': alpha, 'markersize': markersize,
                              'linestyle': 'None'}
@@ -958,6 +959,7 @@ class QInverter:
             k1 = keys.pop()
             for k2 in keys:
                 combinations.append((k1, k2))
+        
         nrows = num.ceil(num.sqrt(len(combinations)+1))
         ncols = int(num.ceil(float(len(combinations)+1)/nrows))
 
@@ -985,7 +987,7 @@ class QInverter:
         fig.savefig(fnout_prefix + "_qvs.png", dpi=200)
         
         fig = plt.figure()
-        self.analyze_selected_couples(couples_with_data, indx, indxinvert)#
+        self.analyze_selected_couples(couples_with_data, indx, indxinvert)
         plt.tight_layout()
         fig.savefig(fnout_prefix + "_spectra.png", dpi=200)
 
@@ -994,15 +996,45 @@ class QInverter:
         ncolumns = int(len(by_target)/nrow)+1
         i = 1
         q_threshold = 2000
-        for k, v in by_target.items():
-            if len(v)<3:
-                continue
-            ax = fig.add_subplot(nrow, ncolumns, i)
-            ax.hist(filter(lambda x: x<=q_threshold, v), bins=20, color='blue')
-            ax.set_title(k)
-            i += 1
-        
-        plt.tight_layout()
+        target_combis_indx = []
+        target_combis_indxinvert = []
+        want_hists_indx = {}
+        want_hists_indxinvert = {}
+        indx = indx[0]
+        indxinvert = indxinvert[0]
+        for i, target_combi in enumerate(target_combis):
+            if target_combi not in want_hists_indx:
+                want_hists_indx[target_combi] = []
+            if target_combi not in want_hists_indxinvert:
+                want_hists_indxinvert[target_combi] = []
+            
+            if i in indx:
+                want_hists_indx[target_combi].append(results["Q"][i])
+            elif i in indxinvert:
+                want_hists_indxinvert[target_combi].append(results["Q"][i])
+            else:
+                raise Exception("Index in None of them")
+        all_combis = list(set(target_combis)) 
+        n_want = len(all_combis)
+        nrows = int(num.ceil(num.sqrt(n_want+1)))
+        ncols = int(num.ceil(float(n_want+1)/nrows))
+        fig, axs = plt.subplots(nrows, ncols, sharex=True, sharey=True)
+        axs = dict(zip(all_combis, flatten_list(axs)))
+        for k, v in want_hists_indx.items():
+            axs[k].hist(v, color=indx_style["markerfacecolor"], alpha=alpha)
+
+        for k, v in want_hists_indxinvert.items():
+            axs[k].hist(v, color=invert_indx_style["markerfacecolor"], alpha=alpha)
+
+        #for k, v in by_target.items():
+        #    if len(v)<3:
+        #        continue
+        #    ax = fig.add_subplot(nrow, ncolumns, i)
+        #    ax.hist(filter(lambda x: x<=q_threshold, v), bins=20, color='blue')
+        #    ax.set_title(k)
+        #    i += 1
+        #
+        #plt.tight_layout()
         fig.savefig(fnout_prefix + "_bytarget.png")
 
 
@@ -1592,26 +1624,34 @@ def paired_sources_dict(paired_sources):
             paired_source_dict[s] += 1
     return paired_source_dict
 
+
+#def get_filters(fmin, fmax, deltaf, fwidth):
+#    fbase = num.
+
+
 def apply_webnet():
     print '-------------------apply  -------------------------------'
-
 
     # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
     # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
     load_coupler = True
+    want_phase = 'P'
+    fn_coupler = 'webnet_pairing_noinci%s.yaml' % want_phase
+    #fn_coupler = 'kannweg%s.yaml' % want_phase
+
     builder = Builder()
     #method = 'sine_psd'
-    #method = 'mtspec'
-    method = 'filter'
+    method = 'mtspec'
+    #method = 'filter'
     if method == 'filter':
-        fwidth = 4.
+        fwidth = 2.
         delta_f = 3.
-        fcs = num.arange(40, 90, delta_f)
+        fcs = num.arange(40, 70, delta_f)
         filters = [(f, fwidth) for f in fcs]
     else:
         filters = None
     use_common = True
-    fmax = 110
+    fmax = 80
     fminrange = 30
 
     vp = 6000.
@@ -1632,11 +1672,10 @@ def apply_webnet():
     reset_events(markers, events)
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
-    want_phase = 'P'
     #window_length = {'S': 0.4, 'P': 0.4}
-    window_by_magnitude = Magnitude2Window.setup(0.08, 2.8)
-    #window_by_magnitude = Magnitude2Window.setup(0.1, 2.8)
-    phase_position = {'S': 0.2, 'P': 0.3}
+    #window_by_magnitude = Magnitude2Window.setup(0.08, 2.7)
+    window_by_magnitude = Magnitude2Window.setup(0.1, 2.8)
+    phase_position = {'S': 0.2, 'P': 0.4}
     #window_length = {'S': 0.4, 'P': 0.4}
     #phase_position = {'S': 0.2, 'P': 0.2}
 
@@ -1654,10 +1693,9 @@ def apply_webnet():
 
     if load_coupler:
         logger.warn('LOAD COUPLER')
-    #fn_coupler = 'dummy_webnet_pairing_%s.yaml' % want_phase
-    fn_coupler = 'webnet_pairing_noinci%s.yaml' % want_phase
 
-    fn_mseed = '/media/usb/webnet/mseed'
+    #fn_mseed = '/data/webnet/gse2/mseed/2008Oct/mseed'
+    fn_mseed = '/data/webnet/gse2/mseed/2008Oct/restitute_pz/restituted'
     ignore = ['*.STC.*.SHZ']
 
     data_pile = pile.make_pile(fn_mseed)
@@ -1729,7 +1767,7 @@ def apply_webnet():
             #    goods += 1
             #else:
             #    bads += 1
-            tracers.extend(pair)
+            #tracers.extend(pair)
             #pairs.append(pair)
     print 'good/bad' , goods, bads
     colors = UniqueColor(tracers=tracers)
@@ -1758,7 +1796,7 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.8, onthefly=True)
+    inverter = QInverter(couples=testcouples, cc_min=0.5, onthefly=True)
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
     for i, tc in enumerate(num.random.choice(good_results, 10)):
@@ -1775,6 +1813,11 @@ def apply_webnet():
 if __name__=='__main__':
 
     #invert_test_2D_parallel(noise_level=0.1)
-    dbtest()
-    #apply_webnet()
+    #dbtest()
+    apply_webnet()
     plt.show()
+
+
+__all__ = '''
+DCSourceWid
+'''.split()

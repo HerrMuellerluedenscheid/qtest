@@ -14,6 +14,7 @@ from pyrocko.guts import List, Object, String, Tuple, Float
 import progressbar
 import logging
 import sys
+from sources import DCSourceWid
 logger = logging.getLogger()
 
 
