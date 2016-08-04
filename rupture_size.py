@@ -1,9 +1,13 @@
-import numpy.random as random
+import numpy as num
 
-def radius(Ml, C1=32.7, C1_err=1.1, C2=0.33, C2_err=0.01):
+def radius(Ml, C1=32.7, C1_err=1.1, C2=0.33, C2_err=0.01, perturb=False):
     # default values by Petr Kolar, 2015
-    _C1_err = random.normal(scale=C1_err,size=len(Ml))
-    _C2_err = random.normal(scale=C2_err,size=len(Ml))
+    if perturb:
+        _C1_err = num.random.normal(scale=C1_err,size=len(Ml))
+        _C2_err = num.random.normal(scale=C2_err,size=len(Ml))
+    else:
+        _C1_err = num.zeros(len(Ml))
+        _C2_err = num.zeros(len(Ml))
     return (C1+_C1_err)*10**((C2+_C2_err)*Ml)
 
 def wc(a, beta):
