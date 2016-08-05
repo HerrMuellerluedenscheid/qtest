@@ -501,6 +501,7 @@ class SyntheticCouple():
         self.invert_data = None
         self._cc = None
         self.filters = {}
+        self.normalize_waveforms = False
 
     def cc_coef(self):
         if self._cc is None:
@@ -534,6 +535,10 @@ class SyntheticCouple():
             ready.append((tr, tracer))
 
         for tr, tracer in ready:
+            if self.normalize_waveforms:
+                ynew = tr.get_ydata()
+                ynew /= num.max(num.abs(ynew))
+                tr.set_ydata(ynew)
             f, a = self.get_spectrum(tr, tracer, length)
             fxfy = num.vstack((f,a))
             self.spectra.spectra.append((tracer, fxfy))
@@ -949,11 +954,8 @@ class QInverter:
                 if selector_min is not None:
                     indx_tmp = num.where(results[selector]>=selector_min)
                     indx = num.intersect1d(indx, indx_tmp[0])
-        print indx==indxall
-        if indx==indxall:
-            indxinvert = num.empty(0, dtype=num.int)
-        else:
-            indxinvert = num.setdiff1d(indxall, indx)
+        indxinvert = num.setdiff1d(indxall, indx)
+        print 'indxinvert', indxinvert
 
         markersize = 1.
         alpha = 0.8
