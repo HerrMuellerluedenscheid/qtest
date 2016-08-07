@@ -60,6 +60,8 @@ class Filtrate(Object):
     targets = List.T(Target.T())
     earthmodel = meta.Earthmodel1D.T()
     phases = List.T(String.T())
+    magdiffmax = Float.T(optional=True)
+    distance3d_min = Float.T(optional=True)
     #couples = List.T(List.T(DCSource.T(),
     #                         DCSource.T(),
     #                         Target.T(),
@@ -77,10 +79,20 @@ class Coupler():
         self.results = []
         self.hookup = None
         self.filtrate = filtrate
+        self.magdiffmax = 100.
+        self.whitelist = None
+        self.distance3d_min = None
         print 'phases in process obsolete'
 
-    def process(self, sources, targets, earthmodel, phases, ignore_segments=True, dump_to=False, check_relevance_by=False):
-        self.filtrate = Filtrate(sources=sources, targets=targets, phases=phases, earthmodel=earthmodel)
+    def process(self, sources, targets, earthmodel, phases, ignore_segments=True,
+                dump_to=False, check_relevance_by=False):
+
+        if self.whitelist:
+            targets = filter(lambda x: x.codes in self.whitelist, targets)
+    
+        self.filtrate = Filtrate(
+            sources=sources, targets=targets, phases=phases,
+            earthmodel=earthmodel, magdiffmax=self.magdiffmax)
         phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
         i = 0
         self.hookup = Hookup.from_locations(targets)
@@ -90,7 +102,7 @@ class Coupler():
         widgets = ['event couples ', progressbar.Percentage(), progressbar.Bar()]
         pb = progressbar.ProgressBar(maxval=len(sources), widgets=widgets).start()
         for i_e, ev in enumerate(sources):
-            pb.update(i_e)
+            #pb.update(i_e)
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
@@ -108,6 +120,9 @@ class Coupler():
                 points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
+                    if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
+                        failed += 1
+                        continue
                     try:
                         traveled_distance, passing_distance, segments = self.get_passing_distance(
                             points_of_segments, num.array(ned_cmp))
