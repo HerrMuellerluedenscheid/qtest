@@ -561,8 +561,8 @@ class SyntheticCouple():
         #self.spectra.plot_all(ax, colors=colors, legend=False)
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
-            Q = self.invert_data[-1]
-            ax.text(0.01, 0.01, "1/Q=%1.6f" % Q,
+            Q = self.invert_data[4]
+            ax.text(0.01, 0.01, "1/Q=%1.6f\ncc=%1.2f" % (Q, self._cc),
                     verticalalignment='bottom',
                     horizontalalignment='left',
                     transform=ax.transAxes)
@@ -784,6 +784,7 @@ class QInverter:
         self.ratios = []
         widgets = ['regression analysis', progressbar.Percentage(), progressbar.Bar()]
         pb = progressbar.ProgressBar(maxval=len(self.couples), widgets=widgets).start()
+        less_than_cc_thres = 0
         for i_c, couple in enumerate(self.couples):
             if self.onthefly:
                 tr1 = couple.master_slave[0].setup_data()
@@ -794,7 +795,8 @@ class QInverter:
                     couple.process()
             cc_coef = couple.cc_coef()
             if cc_coef< self.cc_min:
-                logger.info('lower than cc threshold. skip')
+                less_than_cc_thres += 1
+                #logger.info('lower than cc threshold. skip')
                 continue
             #else:
                 #logger.info('higher than cc threshold. ')
@@ -802,8 +804,11 @@ class QInverter:
             interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
             dt = couple.delta_onset()
             Q = num.pi*dt/slope
-            if num.isnan(Q):
+            if num.isnan(Q) or Q==0.:
                 logger.warn('Q is nan')
+                if self.onthefly:
+                    couple.master_slave[0].drop_data()
+                    couple.master_slave[1].drop_data()
                 continue
             couple.invert_data = (dt, fx, slope, interc, 1./Q, r, p, std)
             self.allqs.append(1./Q)
@@ -811,6 +816,7 @@ class QInverter:
                 couple.master_slave[0].drop_data()
                 couple.master_slave[1].drop_data()
         pb.finish()
+        logger.info('%s lower than cc threshold.' % less_than_cc_thres)
 
     def plot(self, ax=None, q_threshold=None, relative_to=None, want_q=False):
         fig = plt.figure(figsize=(4, 4))
@@ -830,6 +836,7 @@ class QInverter:
         ax.text(0.01, 0.99, txt, size=fsize, transform=ax.transAxes, verticalalignment='top')
         ax.axvline(0, color='black', alpha=0.3)
         ax.axvline(median, color='blue')
+        ax.set_xlim((-1., 1.))
         if q_threshold is not None:
             ax.set_xlim([q_threshold, q_threshold])
         elif relative_to=='median':
@@ -894,6 +901,9 @@ class QInverter:
         target_combis = []
         for ic, c in enumerate(couples_with_data):
             dt, fx, slope, interc, Q, r, p, std = c.invert_data
+            if abs(Q)>0.5 or num.isnan(Q) or Q == 0.:
+                continue
+
             fwidth[ic] = num.max(fx)-num.min(fx)
             rs[ic] = r**2
             ps[ic] = num.log(p)
@@ -981,25 +991,24 @@ class QInverter:
         for icomb, combination in enumerate(combinations):
             wanty, wantx = combination
             ax = fig.add_subplot(nrows, ncols, icomb+1)
-            ax.plot(results[wantx][indx], results[wanty][indx], **indx_style)
             ax.plot(results[wantx][indxinvert], results[wanty][indxinvert], **invert_indx_style)
+            ax.plot(results[wantx][indx], results[wanty][indx], **indx_style)
             ax.set_xlabel(wantx, fontsize=8)
             ax.set_ylabel(wanty, fontsize=8)
         ax = fig.add_subplot(nrows, ncols, icomb+2)
-        ax.hist(results["Q"][indx], bins=30,
+        ax.hist(results["Q"][indxinvert], bins=50,
+            color=invert_indx_style["markerfacecolor"], alpha=alpha)
+        ax.hist(results["Q"][indx], bins=50,
                 color=indx_style["markerfacecolor"], alpha=alpha)
-        ax.hist(results["Q"][indxinvert], bins=30,
-                color=invert_indx_style["markerfacecolor"], alpha=alpha)
         median = num.median(results["Q"][indx])
         txt ='median: %1.4f\n$\sigma$: %1.5f' % (
             median, num.std(results["Q"][indx]))
         ax.text(0.01, 0.99, txt, size=6, transform=ax.transAxes,
                 verticalalignment='top')
-
-        ax.axvline(median, color='black')
+        #ax.axvline(median, color='black')
 
         plt.tight_layout()
-        fig.savefig(fnout_prefix + "_qvs.png", dpi=200)
+        fig.savefig(fnout_prefix + "_qvs.png", dpi=400)
 
         fig = plt.figure()
         self.analyze_selected_couples(couples_with_data, indx, indxinvert)
@@ -1028,22 +1037,23 @@ class QInverter:
             else:
                 raise Exception("Index in None of them")
         all_combis = list(set(target_combis)) 
+        print 'all combis:', all_combis
         n_want = len(all_combis)
-        nrows = int(num.ceil(num.sqrt(n_want+1)))
-        ncols = int(num.ceil(float(n_want)/nrows))
+        nrows = num.max((int(num.ceil(num.sqrt(n_want+1))), 2))
+        ncols = num.max((int(num.ceil(float(n_want)/nrows)), 2))
         fig, axs = plt.subplots(nrows, ncols, sharex=True, sharey=True)
         axs = dict(zip(all_combis, flatten_list(axs)))
+        for k, v in want_hists_indxinvert.items():
+            axs[k].hist(v, color=invert_indx_style["markerfacecolor"], alpha=alpha)
+            axs[k].set_title(k)
+        
         for k, v in want_hists_indx.items():
             axs[k].hist(v, color=indx_style["markerfacecolor"], alpha=alpha)
             axs[k].set_title(k)
 
-        for k, v in want_hists_indxinvert.items():
-            axs[k].hist(v, color=invert_indx_style["markerfacecolor"], alpha=alpha)
-            axs[k].set_title(k)
-
         fig.savefig(fnout_prefix + "_bytarget.png")
 
-        fig, axs = plt.subplots(nrows, ncols, sharex=True, sharey=True)
+        fig, axs = plt.subplots(nrows, ncols, sharex=True)
         axs = dict(zip(all_combis, flatten_list(axs)))
         for i, c in enumerate(couples_with_data):
             tracer1, tracer2 = c.master_slave
@@ -1058,9 +1068,9 @@ class QInverter:
             else:
                 color = invert_indx_style["markerfacecolor"]
             axs[key].plot(tr1.get_xdata(), tr1.get_ydata(), color=color,
-                          alpha=0.5, linewidth=0.2)
+                          alpha=0.5, linewidth=0.4)
             axs[key].plot(tr2.get_xdata(), tr2.get_ydata(), color=color,
-                          alpha=0.5, linewidth=0.2)
+                          alpha=0.5, linewidth=0.4)
 
         for k, ax in axs.items():
             ax.set_title(k)
@@ -1457,7 +1467,7 @@ def dbtest(noise_level=0.0000000000000000005):
 
     if load_coupler:
         print 'load coupler'
-        filtrate = Filtrate.load(filename=fn_coupler)
+        filtrate = Filtrate.load_pickle(filename=fn_coupler)
         sources = filtrate.sources
         coupler = Coupler(filtrate)
         print 'done'
@@ -1663,11 +1673,12 @@ def apply_webnet():
 
     # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
     # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
-    load_coupler = True
+    load_coupler = False
     want_phase = 'P'
-    fn_coupler = 'webnet_pairing_noinci%s.yaml' % want_phase
+    fn_coupler = 'webnet_dd_pickle_%s.yaml' % want_phase
+    #fn_coupler = 'webnet_pairing_dd_more_%s.yaml' % want_phase
     #fn_coupler = 'kannweg%s.yaml' % want_phase
-
+    magdiffmax = 0.5
     builder = Builder()
     #method = 'sine_psd'
     method = 'mtspec'
@@ -1723,30 +1734,35 @@ def apply_webnet():
     if load_coupler:
         logger.warn('LOAD COUPLER')
 
-    #fn_mseed = '/data/webnet/gse2/mseed/2008Oct/mseed'
-    fn_mseed = '/data/webnet/gse2/mseed/2008Oct/restitute_pz/restituted'
     ignore = ['*.STC.*.SHZ']
+    whitelist = [('', 'KRC', '',  'SHZ'),
+                 ('', 'NKC', '',  'SHZ'),
+                 ('', 'POC', '',  'SHZ'),
+                 ('', 'LBC', '',  'SHZ'),
+                 ]
 
-    data_pile = pile.make_pile(fn_mseed)
     if data_pile.tmax==None or data_pile.tmin == None:
         raise Exception('failed reading mseed')
     # webnet Z targets:
     targets = [s2t(s, channel) for s in stations]
     if load_coupler:
-        filtrate = Filtrate.load(filename=fn_coupler)
+        filtrate = Filtrate.load_pickle(filename=fn_coupler)
+        #filtrate = Filtrate.load(filename=fn_coupler)
         sources = filtrate.sources
+        sources = filter(lambda x: x.magnitude>=min_magnitude, sources)
         coupler = Coupler(filtrate)
     else:
         coupler = Coupler()
+        coupler.magdiffmax = magdiffmax
+        coupler.whitelist = whitelist
         sources = [e2s(e) for e in events]
         coupler.process(
             sources, targets, mod, [want_phase, want_phase.lower()],
             ignore_segments=True, dump_to=fn_coupler)
-
     #fig, ax = Animator.get_3d_ax()
     #print coupler.filtrate
     pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate,
-                                         ignore=ignore, max_mag_diff=0.5)
+                                         ignore=ignore, max_mag_diff=magdiffmax)
     paired_sources = []
     for p in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1 = p
@@ -1786,6 +1802,7 @@ def apply_webnet():
             pair = [tracer1, tracer2]
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=method, use_common=use_common)
+            testcouple.normalize_waveforms = True
             testcouple.ray = r
             testcouple.filters = filters
             testcouples.append(testcouple)
