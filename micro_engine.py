@@ -22,6 +22,7 @@ pjoin = os.path.join
 logger = logging.getLogger()
 diff_response = trace.DifferentiationResponse()
 tr_meta_init = {'noisified': False}
+_taper = trace.CosFader(xfrac=0.1)
 
 class ResponseFilter(Filter):
     response = trace.FrequencyResponse.T()
@@ -628,9 +629,21 @@ class Chopper():
             select = lambda x: x.nslc_id[:3] == target.codes[:3]
         # A little dangerous:
         try:
+            add = (tend-tstart) * 0.15
+            
+            tstart -= add/2.
+            tend += add/2.
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
+            tr.highpass(4, 2./(tr.tmax-tr.tmin))
+            
+            tstart += add/2.
+            tend -= add/2.
+            tr.chop(tmin=tstart, tmax=tend)
+            tr.taper(_taper)
+
         except IndexError as e:
             tr = None
+
         return tr
 
     def setup_time_window(self, tstart, tend):
