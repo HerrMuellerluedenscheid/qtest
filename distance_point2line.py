@@ -74,6 +74,16 @@ class Filtrate(Object):
     def __len__(self):
         return len(self.couples)
 
+    def dump_pickle(self, filename):
+        import cPickle as pickle
+        pickle.dump(self, open(filename, 'wb'))
+
+    @classmethod
+    def load_pickle(cls, filename):
+        import cPickle as pickle
+        return pickle.load(open(filename, 'rb'))
+
+
 class Coupler():
     def __init__(self, filtrate=None):
         self.results = []
@@ -151,8 +161,8 @@ class Coupler():
             raise Exception('Coupling failed')
 
         if dump_to:
-            self.filtrate.validate()
-            self.filtrate.dump(filename=dump_to)
+            self.filtrate.dump_pickle(filename=dump_to)
+            #self.filtrate.dump(filename=dump_to)
 
     def ray_length(self, arrival):
         z, x, t = arrival.zxt_path_subdivided()
