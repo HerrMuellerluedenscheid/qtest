@@ -77,9 +77,11 @@ class Filtrate(Object):
     def dump_pickle(self, filename):
         import cPickle as pickle
         pickle.dump(self, open(filename, 'wb'))
+        logger.info('dump cpickle: %s' % filename)
 
     @classmethod
     def load_pickle(cls, filename):
+        logger.info('load cpickle: %s' % filename)
         import cPickle as pickle
         return pickle.load(open(filename, 'rb'))
 
