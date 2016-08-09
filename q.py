@@ -340,7 +340,7 @@ def spectralize(tr, method='mtspec', **kwargs):
             #tr_work.taper(_taperer, inplace=True, chop=False)
             tr_work.set_codes(network=str(filt))
             fcenter, fwidth = filt
-            apply_filter(tr_work, 4, fcenter-fwidth/2., fcenter+fwidth/2.)
+            apply_filter(tr_work, 2, fcenter-fwidth/2., fcenter+fwidth/2.)
             #tr_work.highpass(4, fcenter-fwidth/2.)
             #tr_work.lowpass(4, fcenter+fwidth/2.)
 
@@ -956,7 +956,7 @@ class QInverter:
         #selector_max = 0.
         #selector_min = 0.90
         selectors = [
-            ("r2-value", 0.8, None),
+            ("r2-value", 0.6, None),
             #("magdiff", None,  0.3),
             #("cc", 0.9, None),
         ]
@@ -1078,8 +1078,10 @@ class QInverter:
             tr2.shift(-tr2.tmin)
             if i in indx:
                 color = indx_style["markerfacecolor"]
+                label = 'good'
             else:
                 color = invert_indx_style["markerfacecolor"]
+                label = ''
             axs[key].plot(tr1.get_xdata(), tr1.get_ydata(), color=color,
                           alpha=0.5, linewidth=0.4)
             axs[key].plot(tr2.get_xdata(), tr2.get_ydata(), color=color,
@@ -1233,7 +1235,6 @@ def invert_test_2D_parallel(noise_level=0.001):
             config.sw_sampling = 1
             #config.gradient_resolution_vp = 120.
             config.wavenumber_sampling = 6.
-            config.validate()
             slow = p_chopper.arrival(sources[itarget], target).p/(cake.r2d*cake.d2m/cake.km)
             config.slowness_window = [slow*0.6, slow*0.9, slow*1.1, slow*1.4]
 #
@@ -1325,29 +1326,27 @@ def dbtest(noise_level=0.0000000000000000005):
     print '-------------------db test-------------------------------'
     use_real_shit = False
     use_extended_sources = False
-    use_responses = True                            # 2 test
-    load_coupler = False
-    test_scenario = True
+    use_responses = True
+    load_coupler = True
+    #fn_coupler = 'dummy_coupling.yaml'
+    fn_coupler = 'pickled_couples.p'
+    #fn_coupler = None
+    test_scenario = False
+    normalize_waveforms = True
     #want_station = ('cz', 'nkc', '')
     #want_station = ('cz', 'kac', '')
     want_station = 'all'
     lat = 50.2059
     lon = 12.5152
     sources = []
-    method = 'filter'
-    #method = 'mtspec'
+    #method = 'filter'
+    method = 'mtspec'
     #method = 'sine_psd'
     if method == 'filter':
-        fwidth = 10.
-        filters = [(30, fwidth), 
-                   (35, fwidth), 
-                   (40, fwidth), 
-                   (50, fwidth),
-                   (60, fwidth),
-                   (70, fwidth), 
-                   (80, fwidth),
-                   (100, fwidth*2),
-                   ]
+        delta_f = 3.
+        fcs = num.arange(30, 85, delta_f)
+        fwidth = 3
+        filters = [(f, fwidth) for f in fcs]
     else:
         filters = None
     min_magnitude = 2.
@@ -1360,7 +1359,7 @@ def dbtest(noise_level=0.0000000000000000005):
     fmin = 31.
     fmin = Magnitude2fmin.setup(lim=fmin)
     fmax = 90.
-    window_by_magnitude = Magnitude2Window.setup(0.08, 4.)
+    window_by_magnitude = Magnitude2Window.setup(0.12, 4.)
     quantity = 'displacement'
     #store_id = 'qplayground_total_2'
     #store_id = 'qplayground_total_2_q25'
@@ -1368,8 +1367,8 @@ def dbtest(noise_level=0.0000000000000000005):
     #store_id = 'qplayground_total_1_hr'
     #store_id = 'qplayground_total_4_hr'
     #store_id = 'qplayground_total_4_hr_full'
-    store_id = 'ahfullgreen_3'
-    #store_id = 'ahfullgreen_4'
+    #store_id = 'ahfullgreen_2'
+    store_id = 'ahfullgreen_4'
 
     # setting the dc components:
 
@@ -1405,7 +1404,8 @@ def dbtest(noise_level=0.0000000000000000005):
 
     # distances used if not real sources:
     if test_scenario:
-        distances = num.linspace(config.distance_min+gf_padding, config.distance_max-gf_padding, 12)
+        distances = num.linspace(config.distance_min+gf_padding,
+                                 config.distance_max-gf_padding, 12)
         source_depths = num.linspace(zmin, zmax, 12)
     else:
         distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 200)
@@ -1417,13 +1417,11 @@ def dbtest(noise_level=0.0000000000000000005):
     p_chopper = Chopper('first(p)', phase_position=0.5,
                         by_magnitude=window_by_magnitude,
                         phaser=PhasePie(mod=mod))
-    stf_type = 'brunes'
-    #stf_type = 'halfsin'
+    #stf_type = 'brunes'
+    stf_type = 'halfsin'
     #stf_type =  None
     tracers = []
     want_phase = 'p'
-    fn_coupler = 'dummy_coupling.yaml'
-    #fn_coupler = None
     fn_noise = '/media/usb/webnet/mseed/noise.mseed'
     fn_records = '/media/usb/webnet/mseed'
     #if use_real_shit:
@@ -1569,7 +1567,7 @@ def dbtest(noise_level=0.0000000000000000005):
     #fig, ax = animator.get_3d_ax()
     #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
     pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate,
-                                         max_mag_diff=0.5)
+                                         max_mag_diff=0.2)
     animator = Animator(pairs_by_rays)
     #plt.show()
     widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
@@ -1599,6 +1597,11 @@ def dbtest(noise_level=0.0000000000000000005):
         pair = []
         for sx in [s1, s2]:
             fmin1 = fmin_by_magnitude(sx.magnitude)
+            if want_phase.upper()=="S":
+                # accounts for fc changes: Abstract
+                # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
+                fmin1 /= 1.5
+
             #fmax = min(fmax_lim, vp/fresnel_lambda(totald, td, pd))
             #print 'test me, change channel code id to lqt'
             #t.dip = -90. + i1
@@ -1618,6 +1621,7 @@ def dbtest(noise_level=0.0000000000000000005):
 
         if len(pair)==2:
             testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
+            testcouple.normalize_waveforms = normalize_waveforms
             testcouple.ray = p
             testcouple.filters = filters
             #testcouple.process(noise=noise)
@@ -1768,7 +1772,6 @@ def apply_webnet():
     targets = [s2t(s, channel) for s in stations]
     if load_coupler:
         filtrate = Filtrate.load_pickle(filename=fn_coupler)
-        #filtrate = Filtrate.load(filename=fn_coupler)
         sources = filtrate.sources
         sources = filter(lambda x: x.magnitude>=min_magnitude, sources)
         coupler = Coupler(filtrate)
@@ -1880,8 +1883,8 @@ def apply_webnet():
 if __name__=='__main__':
 
     #invert_test_2D_parallel(noise_level=0.1)
-    #dbtest()
-    apply_webnet()
+    dbtest()
+    #apply_webnet()
     plt.show()
 
 
