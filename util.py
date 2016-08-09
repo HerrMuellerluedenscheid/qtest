@@ -98,6 +98,28 @@ def fit_log(onset1, onset2, mtspec_args, taper_args=None, fminmax=(-999, 999),
 
 
 
+def window(freqs, fc, b):                                                                                                                     
+    if fc == 0.:
+        w = num.zeros(len(freqs))
+        w[freqs == 0] = 1.
+        return w
+    T = num.log10(freqs/fc)*b
+    w = (num.sin(T)/T)**4
+    w[freqs == fc] = 1.
+    w[freqs == 0.] = 0.
+    w /= num.sum(w)
+    return w
+
+
+def konnoohmachi(amps, freqs, b=20):                                                                                     
+    smooth = num.zeros(len(freqs), dtype=freqs.dtype)
+    amps = num.array(amps)
+    for i, fc in enumerate(freqs):
+        fkey = tuple((b, fc, freqs[0], freqs[1], freqs[-1]))
+        win = window(freqs, fc, b)
+        smooth[i] = num.sum(win*amps)
+
+    return smooth
 
 
 def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):

@@ -356,6 +356,8 @@ def spectralize(tr, method='mtspec', **kwargs):
             plt.show()
     else:
         raise Exception("unknown method")
+
+    #a = konnoohmachi(a, f, 20)
     return f, a
 
 
@@ -956,14 +958,14 @@ class QInverter:
         #selector_max = 0.
         #selector_min = 0.90
         selectors = [
-            ("r2-value", 0.6, None),
+            #("std", None, 0.025),
+            ("r2-value", 0.2, None),
+            #("cc", 0.8, None),
             #("magdiff", None,  0.3),
-            #("cc", 0.9, None),
         ]
         indxall = num.arange(len(couples_with_data)) 
         indx = indxall
         #indxinvert = num.arange(len(couples_with_data))
-
         for selector, selector_min, selector_max in selectors:
             if selector is not None:
                 if selector_max is not None:
@@ -1716,32 +1718,41 @@ def apply_webnet():
     else:
         filters = None
     use_common = True
-    fmax = 80
+    fmax = 100.
     fminrange = 30
-
+    snr_min = 25.
     vp = 6000.
-    fmin_by_magnitude = Magnitude2fmin.setup(lim=30)
-    #min_magnitude = 0.3
+    fmin_by_magnitude = Magnitude2fmin.setup(lim=40)
+    #################################################
+    #min_magnitude = 1.5
+    min_magnitude = .5
     max_magnitude = 4.
-    min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    markers = PhaseMarker.load_markers('/data/meta/webnet_reloc/hypo_dd_markers.pf')
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
-    print len(events)
+    #markers = PhaseMarker.load_markers('/data/meta/webnet_reloc/hypo_dd_markers.pf')
+    #events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    markers = PhaseMarker.load_markers('/home/marius/josef_dd/hypodd_markers_josef.pf')
+    events = list(model.Event.load_catalog('/home/marius/josef_dd/events_from_sebastian.pf'))
+    fn_mseed = '/data/webnet/gse2/mseed/2008Oct/mseed'
+    #fn_mseed = '/data/webnet/gse2/mseed/2008Oct/restitute_pz/restituted'
+    data_pile = pile.make_pile(fn_mseed)
+    print data_pile
+    print "nevents ", len(events)
+    print "nmarkers ", len(markers)
     #events = num.random.choice(events, num_use_events)
+    print 'initially %s events' , len(events)
+    events = filter(lambda x: x.time>data_pile.tmin and x.time<data_pile.tmax, events)
+    print 'after time filtering %s ' , len(events)
     events = filter(lambda x: x.magnitude>= min_magnitude, events)
     events = filter(lambda x: x.magnitude<= max_magnitude, events)
     print '%s events'% len(events)
     reset_events(markers, events)
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
-    #window_length = {'S': 0.4, 'P': 0.4}
     #window_by_magnitude = Magnitude2Window.setup(0.08, 2.7)
-    window_by_magnitude = Magnitude2Window.setup(0.1, 2.8)
-    phase_position = {'S': 0.2, 'P': 0.4}
-    #window_length = {'S': 0.4, 'P': 0.4}
+    window_by_magnitude = Magnitude2Window.setup(0.08, 5.)
+    phase_position = {'S': 0.2, 'P': 0.3}
     #phase_position = {'S': 0.2, 'P': 0.2}
 
     # in order to rotate into lqt system
@@ -1785,7 +1796,7 @@ def apply_webnet():
             ignore_segments=True, dump_to=fn_coupler)
     #fig, ax = Animator.get_3d_ax()
     #print coupler.filtrate
-    pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate,
+    pairs_by_rays = coupler.filter_pairs(3., 1000., data=coupler.filtrate,
                                          ignore=ignore, max_mag_diff=magdiffmax)
     paired_sources = []
     for p in pairs_by_rays:
@@ -1866,10 +1877,10 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.5, onthefly=True)
+    inverter = QInverter(couples=testcouples, cc_min=0.9, onthefly=True)
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
-    for i, tc in enumerate(num.random.choice(good_results, 10)):
+    for i, tc in enumerate(num.random.choice(good_results, 30)):
         fn = 'application/%s/example_%s.png' % (want_phase, str(i).zfill(2))
         tc.plot(infos=infos, colors=colors, savefig=fn)
     inverter.plot()#q_threshold=600, relative_to='median')
