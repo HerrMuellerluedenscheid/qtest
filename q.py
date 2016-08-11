@@ -380,7 +380,7 @@ class Spectra(DDContainer):
     def set_fit_function(self, func):
         self.fit_function = func
 
-    def plot_all(self, ax=None, colors=None, alpha=1., legend=True):
+    def plot_all(self, ax=None, colors='rb', alpha=1., legend=True):
         if not ax:
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -392,10 +392,10 @@ class Spectra(DDContainer):
                 i_fail -= 0.1
                 continue
             fx, fy = num.vsplit(fxfy, 2)
-            if colors:
+            if colors != 'rb':
                 color = colors[tracer]
             else:
-                color = 'black'
+                color = colors[count]
             ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
             #ax.plot(fx.T, fy.T, '+', label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
@@ -561,6 +561,7 @@ class SyntheticCouple():
         fn = kwargs.pop('savefig', False)
         fig = plt.figure(figsize=(4, 6.5))
         ax = fig.add_subplot(3, 1, 3)
+        colors = 'rb'
         #self.spectra.plot_all(ax, colors=colors, legend=False)
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
@@ -577,7 +578,8 @@ class SyntheticCouple():
             tracer.setup_data()
             tr = tracer.processed
             otime = tracer.source.time
-            plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color='black')
+            plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(),
+                        color=colors[i])
             #plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color=colors[tracer])
             ax.text(0.01, 0.01, 'Ml=%1.1f, station: %s'
                     %( tracer.source.magnitude, tracer.target.codes[1]),
