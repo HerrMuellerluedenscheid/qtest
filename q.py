@@ -386,17 +386,25 @@ class Spectra(DDContainer):
             ax = fig.add_subplot(111)
         count = 0
         i_fail = 0
+        i = 0
         for tracer, fxfy in self.spectra:
             if fxfy is None:
                 ax.text(0.01, 0.90+i_fail, 'no data', transform=ax.transAxes, verticalalignment='top')
                 i_fail -= 0.1
                 continue
             fx, fy = num.vsplit(fxfy, 2)
+<<<<<<< Updated upstream
             if colors != 'rb':
                 color = colors[tracer]
             else:
                 color = colors[count]
             ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
+=======
+            #if colors:
+            #    color = colors[tracer]
+            #else:
+            ax.plot(fx.T, fy.T, label=tracer.label(), color=colors[count], alpha=alpha)
+>>>>>>> Stashed changes
             #ax.plot(fx.T, fy.T, '+', label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
             count += 1
@@ -1329,12 +1337,13 @@ def wanted_q(mod, z):
 
 def dbtest(noise_level=0.0000000000000000005):
     print '-------------------db test-------------------------------'
-    use_real_shit = False
+    use_real_shit = True
     use_extended_sources = False
     use_responses = True
     load_coupler = True
+    fn_coupler = 'dummy_coupling.p'
     #fn_coupler = 'dummy_coupling.yaml'
-    fn_coupler = 'pickled_couples.p'
+    #fn_coupler = 'pickled_couples.p'
     #fn_coupler = None
     test_scenario = False
     normalize_waveforms = True
@@ -1371,24 +1380,24 @@ def dbtest(noise_level=0.0000000000000000005):
     #store_id = 'qplayground_total_2_q400'
     #store_id = 'qplayground_total_1_hr'
     #store_id = 'qplayground_total_4_hr'
-    #store_id = 'qplayground_total_4_hr_full'
+    store_id = 'qplayground_total_4_hr_full'
     #store_id = 'ahfullgreen_2'
-    store_id = 'ahfullgreen_4'
+    #store_id = 'ahfullgreen_4'
 
     # setting the dc components:
 
-    #strikemin = 160
-    #strikemax = 180
-    #dipmin = -60
-    #dipmax = -80
-    #rakemin = 20
-    #rakemax = 40
-    strikemin = 170
-    strikemax = 170
-    dipmin = -70
-    dipmax = -70
-    rakemin = 30
-    rakemax = 30
+    strikemin = 160
+    strikemax = 180
+    dipmin = -60
+    dipmax = -80
+    rakemin = 20
+    rakemax = 40
+    #strikemin = 170
+    #strikemax = 170
+    #dipmin = -70
+    #dipmax = -70
+    #rakemin = 30
+    #rakemax = 30
 
     engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
     #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
@@ -1728,8 +1737,8 @@ def apply_webnet():
     fmin_by_magnitude = Magnitude2fmin.setup(lim=40)
     #################################################
     #min_magnitude = 1.5
-    min_magnitude = .5
     max_magnitude = 4.
+    min_magnitude = 2.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
@@ -1880,7 +1889,7 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.9, onthefly=True)
+    inverter = QInverter(couples=testcouples, cc_min=0.8, onthefly=True)
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
     for i, tc in enumerate(num.random.choice(good_results, 30)):
