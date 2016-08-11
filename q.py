@@ -555,9 +555,10 @@ class SyntheticCouple():
         return spectralize(tr, self.method, **spectralize_kwargs)
 
     def plot(self, colors, **kwargs):
+        colors = 'rb'
         fn = kwargs.pop('savefig', False)
         fig = plt.figure(figsize=(4, 6.5))
-        ax = fig.add_subplot(3, 1, 3)
+        ax = fig.add_subplot(2, 1, 2)
         #self.spectra.plot_all(ax, colors=colors, legend=False)
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
@@ -569,7 +570,7 @@ class SyntheticCouple():
         yshift=0
         info_str = ''
         for i, tracer in enumerate(self.master_slave):
-            ax = fig.add_subplot(3, 1, 1+i)
+            ax = fig.add_subplot(2, 1, 1+i)
             ax.set_xlabel('time [s]')
             tracer.setup_data()
             tr = tracer.processed
@@ -1639,9 +1640,9 @@ def dbtest(noise_level=0.0000000000000000005):
     #plt.gcf().savefig('output/%s.png' % outfn)
     inverter = QInverter(couples=testcouples, onthefly=True, cc_min=0.5)
     inverter.invert()
-    #for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
-    #    fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
-    #    testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
+    for i, testcouple in enumerate(num.random.choice(testcouples, 10)):
+        fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
+        testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
     inverter.plot()
     #inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
     fig = plt.gcf()
