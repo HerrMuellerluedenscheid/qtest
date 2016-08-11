@@ -393,18 +393,11 @@ class Spectra(DDContainer):
                 i_fail -= 0.1
                 continue
             fx, fy = num.vsplit(fxfy, 2)
-<<<<<<< Updated upstream
             if colors != 'rb':
                 color = colors[tracer]
             else:
                 color = colors[count]
             ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
-=======
-            #if colors:
-            #    color = colors[tracer]
-            #else:
-            ax.plot(fx.T, fy.T, label=tracer.label(), color=colors[count], alpha=alpha)
->>>>>>> Stashed changes
             #ax.plot(fx.T, fy.T, '+', label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
             count += 1
