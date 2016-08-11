@@ -29,7 +29,7 @@ from micro_engine import associate_responses, UniformTTPerturbation
 from autogain.autogain import PhasePie, PickPie
 from distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
 from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
-from util import e2extendeds, e2s, s2t
+from util import e2extendeds, e2s, s2t, konnoohmachi
 from sources import DCSourceWid
 
 
@@ -315,7 +315,7 @@ def spectralize(tr, method='mtspec', **kwargs):
                       #number_of_tapers=2,
                       #time_bandwidth=7.5,
                       time_bandwidth=4.,
-                      nfft=nextpow2(len(tr.get_ydata())),
+                      nfft=nextpow2(len(tr.get_ydata()))*4,
                       quadratic=True,
                       statistics=False)
         a = num.sqrt(a)
@@ -356,6 +356,8 @@ def spectralize(tr, method='mtspec', **kwargs):
             plt.show()
     else:
         raise Exception("unknown method")
+
+    #a = konnoohmachi(a, f, 20)
     return f, a
 
 
@@ -378,7 +380,7 @@ class Spectra(DDContainer):
     def set_fit_function(self, func):
         self.fit_function = func
 
-    def plot_all(self, ax=None, colors=None, alpha=1., legend=True):
+    def plot_all(self, ax=None, colors='rb', alpha=1., legend=True):
         if not ax:
             fig = plt.figure()
             ax = fig.add_subplot(111)
@@ -390,10 +392,10 @@ class Spectra(DDContainer):
                 i_fail -= 0.1
                 continue
             fx, fy = num.vsplit(fxfy, 2)
-            if colors:
+            if colors != 'rb':
                 color = colors[tracer]
             else:
-                color = 'black'
+                color = colors[count]
             ax.plot(fx.T, fy.T, label=tracer.label(), color=color, alpha=alpha)
             #ax.plot(fx.T, fy.T, '+', label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
@@ -512,6 +514,7 @@ class SyntheticCouple():
                     tr1.processed,
                     tr2.processed,
                     mode='same',
+                    use_fft=True,
                     normalization='normal')
             else:
                 self._cc = 0.
@@ -558,7 +561,8 @@ class SyntheticCouple():
         colors = 'rb'
         fn = kwargs.pop('savefig', False)
         fig = plt.figure(figsize=(4, 6.5))
-        ax = fig.add_subplot(2, 1, 2)
+        ax = fig.add_subplot(3, 1, 3)
+        colors = 'rb'
         #self.spectra.plot_all(ax, colors=colors, legend=False)
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
@@ -575,7 +579,8 @@ class SyntheticCouple():
             tracer.setup_data()
             tr = tracer.processed
             otime = tracer.source.time
-            plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color='black')
+            plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(),
+                        color=colors[i])
             #plot_traces(tr=tr, t_shift=-otime, ax=ax, label=tracer.label(), color=colors[tracer])
             ax.text(0.01, 0.01, 'Ml=%1.1f, station: %s'
                     %( tracer.source.magnitude, tracer.target.codes[1]),
@@ -805,8 +810,8 @@ class QInverter:
             interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
             dt = couple.delta_onset()
             Q = num.pi*dt/slope
-            if num.isnan(Q) or Q==0.:
-                logger.warn('Q is nan')
+            if num.isnan(Q) or Q==0. or dt>4.:
+                logger.warn('Q is nan or dt>4')
                 if self.onthefly:
                     couple.master_slave[0].drop_data()
                     couple.master_slave[1].drop_data()
@@ -851,21 +856,10 @@ class QInverter:
 
     def analyze_selected_couples(self, couples, indx, indxinvert):
         fig = plt.gcf()
-        ax1 = fig.add_subplot(211)
-        ax2 = fig.add_subplot(212)
+        ax1 = fig.add_subplot(121)
+        ax2 = fig.add_subplot(122)
         #ax3 = fig.add_subplot(223)
         #ax4 = fig.add_subplot(224)
-
-        for i in indx:
-            c = couples[i]
-            freqs = c.spectra.freqs()
-            amps = c.spectra.amps()
-            fmin, fmax = c.frequency_range_work()
-            freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
-
-            for i in xrange(1):
-                ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='blue')
-            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='blue')
 
         for i in indxinvert:
             c = couples[i]
@@ -878,7 +872,19 @@ class QInverter:
                 ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='red')
             ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='red')
 
-        #for ax in [ax1, ax2, ax3, ax4]:
+        for i in indx:
+            c = couples[i]
+            freqs = c.spectra.freqs()
+            amps = c.spectra.amps()
+            fmin, fmax = c.frequency_range_work()
+            freqsi, ampsi = c.spectra.get_interpolated_spectra(fmin, fmax)
+
+            for i in xrange(1):
+                ax1.plot(freqs[i], amps[i], alpha=0.6, linewidth=0.1, color='blue')
+            ax2.plot(freqsi, num.log(ampsi[0]/ampsi[1]), alpha=0.6, linewidth=0.1, color='blue')
+
+        #for ax in [ax1, ax2, ax3, ax4]:'
+        ax1.set_xlim((25, 110))
         ax1.set_xscale('log')
         ax1.set_yscale('log')
 
@@ -886,6 +892,11 @@ class QInverter:
     def analyze(self, couples=None, fnout_prefix="q_fit_analysis"):
         couples_with_data = filter(lambda x: x.invert_data is not None,
                                    self.couples)
+        couples_with_data = filter(lambda x:
+                                   x.invert_data[4] < 0.5 and \
+                                   not num.isnan(x.invert_data[4]) and\
+                                   num.abs(x.invert_data[4])<5E3, 
+                                   couples_with_data)
         n = len(couples_with_data)
         Qs = num.empty(n)
         mags = num.empty(n)
@@ -900,10 +911,12 @@ class QInverter:
         fwidth = num.empty(n)
         by_target = {}
         target_combis = []
+        
+
         for ic, c in enumerate(couples_with_data):
             dt, fx, slope, interc, Q, r, p, std = c.invert_data
-            if abs(Q)>0.5 or num.isnan(Q) or Q == 0.:
-                continue
+            #if abs(Q)>0.5 or num.isnan(Q) or num.abs(Q)>1E30:
+            #    continue
 
             fwidth[ic] = num.max(fx)-num.min(fx)
             rs[ic] = r**2
@@ -948,14 +961,14 @@ class QInverter:
         #selector_max = 0.
         #selector_min = 0.90
         selectors = [
-            ("r2-value", 0.6, None),
+            #("std", None, 0.025),
+            ("r2-value", 0.2, None),
+            #("cc", 0.8, None),
             #("magdiff", None,  0.3),
-            #("cc", 0.9, None),
         ]
         indxall = num.arange(len(couples_with_data)) 
         indx = indxall
         #indxinvert = num.arange(len(couples_with_data))
-
         for selector, selector_min, selector_max in selectors:
             if selector is not None:
                 if selector_max is not None:
@@ -966,7 +979,11 @@ class QInverter:
                     indx_tmp = num.where(results[selector]>=selector_min)
                     indx = num.intersect1d(indx, indx_tmp[0])
         indxinvert = num.setdiff1d(indxall, indx)
-        print 'indxinvert', indxinvert
+        #if abs(len(indxinvert)-len(indxall))<2:
+        #    logger.warn('bad results')
+        #    return 
+        print 'len indx', len(indx)
+        print 'len indxinvert', len(indxinvert)
 
         markersize = 1.
         alpha = 0.8
@@ -1079,6 +1096,11 @@ class QInverter:
             ax.set_title(k)
 
         fig.savefig(fnout_prefix + "_traces.png", dpi=240)
+        
+        for k, v in results.iteritems():
+            with open(fnout_prefix+"data_%s.txt" % k, 'w') as f:
+                for item in v:
+                    f.write("%1.6f \n" % item)
 
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     cmap = mpl.cm.get_cmap(cmap)
@@ -1678,9 +1700,12 @@ def apply_webnet():
 
     # aus dem GJI 2015 paper ueber vogtland daempfung von Gaebler:
     # Shearer 1999: Qp/Qs = 2.25 (intrinsic attenuation)
-    load_coupler = False
     want_phase = 'P'
+    
+    load_coupler = True
     fn_coupler = 'webnet_dd_pickle_%s.yaml' % want_phase
+    #fn_coupler = 'webnet_dd_pickle_old%s.yaml' % want_phase
+
     #fn_coupler = 'webnet_pairing_dd_more_%s.yaml' % want_phase
     #fn_coupler = 'kannweg%s.yaml' % want_phase
     magdiffmax = 0.5
@@ -1696,32 +1721,41 @@ def apply_webnet():
     else:
         filters = None
     use_common = True
-    fmax = 80
+    fmax = 100.
     fminrange = 30
-
+    snr_min = 25.
     vp = 6000.
-    fmin_by_magnitude = Magnitude2fmin.setup(lim=30)
-    #min_magnitude = 0.3
+    fmin_by_magnitude = Magnitude2fmin.setup(lim=40)
+    #################################################
+    #min_magnitude = 1.5
+    min_magnitude = .5
     max_magnitude = 4.
-    min_magnitude = 0.
     mod = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
     #markers = PhaseMarker.load_markers('/media/usb/webnet/meta/phase_markers2008_extracted.pf')
     #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    markers = PhaseMarker.load_markers('/data/meta/webnet_reloc/hypo_dd_markers.pf')
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
-    print len(events)
+    #markers = PhaseMarker.load_markers('/data/meta/webnet_reloc/hypo_dd_markers.pf')
+    #events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
+    markers = PhaseMarker.load_markers('/home/marius/josef_dd/hypodd_markers_josef.pf')
+    events = list(model.Event.load_catalog('/home/marius/josef_dd/events_from_sebastian.pf'))
+    fn_mseed = '/data/webnet/gse2/mseed/2008Oct/mseed'
+    #fn_mseed = '/data/webnet/gse2/mseed/2008Oct/restitute_pz/restituted'
+    data_pile = pile.make_pile(fn_mseed)
+    print data_pile
+    print "nevents ", len(events)
+    print "nmarkers ", len(markers)
     #events = num.random.choice(events, num_use_events)
+    print 'initially %s events' , len(events)
+    events = filter(lambda x: x.time>data_pile.tmin and x.time<data_pile.tmax, events)
+    print 'after time filtering %s ' , len(events)
     events = filter(lambda x: x.magnitude>= min_magnitude, events)
     events = filter(lambda x: x.magnitude<= max_magnitude, events)
     print '%s events'% len(events)
     reset_events(markers, events)
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
     stations = model.load_stations('/data/meta/stations.pf')
-    #window_length = {'S': 0.4, 'P': 0.4}
     #window_by_magnitude = Magnitude2Window.setup(0.08, 2.7)
-    window_by_magnitude = Magnitude2Window.setup(0.1, 2.8)
-    phase_position = {'S': 0.2, 'P': 0.4}
-    #window_length = {'S': 0.4, 'P': 0.4}
+    window_by_magnitude = Magnitude2Window.setup(0.08, 5.)
+    phase_position = {'S': 0.2, 'P': 0.3}
     #phase_position = {'S': 0.2, 'P': 0.2}
 
     # in order to rotate into lqt system
@@ -1765,7 +1799,7 @@ def apply_webnet():
             ignore_segments=True, dump_to=fn_coupler)
     #fig, ax = Animator.get_3d_ax()
     #print coupler.filtrate
-    pairs_by_rays = coupler.filter_pairs(4., 1000., data=coupler.filtrate,
+    pairs_by_rays = coupler.filter_pairs(3., 1000., data=coupler.filtrate,
                                          ignore=ignore, max_mag_diff=magdiffmax)
     paired_sources = []
     for p in pairs_by_rays:
@@ -1791,15 +1825,15 @@ def apply_webnet():
         tracer1 = DataTracer(data_pile=data_pile, source=s1, target=t,
                              chopper=p_chopper, channel=channel, fmin=fmin1,
                              fmax=fmax, incidence_angle=i1)
+        tracer1.snr_min = snr_min
                              #rotate_channels=rotate_channels)
-        #tracer1.setup_data()
 
         fmin2 = fmin_by_magnitude(s2.magnitude)
         tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t,
                              chopper=p_chopper, channel=channel, fmin=fmin2,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
-        #tracer2.setup_data()
+        tracer2.snr_min = snr_min
         if fmax-fmin1<fminrange or fmax-fmin2<fminrange:
             continue
         else:
@@ -1846,10 +1880,10 @@ def apply_webnet():
     #pb.finish()
     #plt.show()
     #testcouples = filter(lambda x: x.delta_onset()>0.06, testcouples)
-    inverter = QInverter(couples=testcouples, cc_min=0.5, onthefly=True)
+    inverter = QInverter(couples=testcouples, cc_min=0.9, onthefly=True)
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
-    for i, tc in enumerate(num.random.choice(good_results, 10)):
+    for i, tc in enumerate(num.random.choice(good_results, 30)):
         fn = 'application/%s/example_%s.png' % (want_phase, str(i).zfill(2))
         tc.plot(infos=infos, colors=colors, savefig=fn)
     inverter.plot()#q_threshold=600, relative_to='median')
@@ -1857,7 +1891,7 @@ def apply_webnet():
     fig.savefig('application/%s/hist_application.png' % want_phase, dpi=600)
     #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
     #couples = inverter.couples
-    inverter.analyze()
+    inverter.analyze(fnout_prefix="application/%s/q_fit_analysis" % want_phase)
 
 
 if __name__=='__main__':

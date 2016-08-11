@@ -545,11 +545,13 @@ class DataTracer(Tracer):
         self.rotate_channels = rotate_channels
         self.incidence_angle = incidence_angle
         self.back_azimuth = self.target.azibazi_to(self.source)[1]
+        self.snr_min = None
 
     def setup_data(self, *args, **kwargs):
         if self.rotate_channels:
             trs = self.chopper.chop_pile(
-                self.data_pile, self.source, self.target, all_channels=True)
+                self.data_pile, self.source, self.target, all_channels=True,
+                snr_min=self.snr_min)
             if trs is None:
                 tr = False
             else:
@@ -560,7 +562,8 @@ class DataTracer(Tracer):
                 tr = filter(tr.channel==self.channel, trs)
         else:
             tr = self.chopper.chop_pile(
-                self.data_pile, self.source, self.target, all_channels=False)
+                self.data_pile, self.source, self.target, all_channels=False,
+                snr_min=self.snr_min)
             if tr is None:
                 tr = False
             else:
@@ -613,7 +616,11 @@ class Chopper():
             return "NoData"
         return tr
 
-    def chop_pile(self, data_pile, source, target, all_channels=False):
+    def chop_pile(self, data_pile, source, target, all_channels=False,
+                  snr_min=None):
+        '''
+        :param snr_min: if defined return trace or None if lower than snr_min
+        '''
         tstart = self.phase_pie.t(self.startphasestr, (source, target))
         if not tstart:
             return tstart
@@ -633,6 +640,7 @@ class Chopper():
             
             tstart -= add/2.
             tend += add/2.
+
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
             tr.highpass(4, 2./(tr.tmax-tr.tmin))
             
@@ -640,7 +648,12 @@ class Chopper():
             tend -= add/2.
             tr.chop(tmin=tstart, tmax=tend)
             tr.taper(_taper)
-
+            if snr_min:
+                ntr = data_pile.chop(tmin=tstart-1, tmax=tstart, trace_selector=select)[0][0]
+                noise_level = num.max(num.abs(ntr.ydata))
+                snr = num.max(num.abs(tr.ydata))/noise_level
+                if snr<snr_min:
+                    tr = None
         except IndexError as e:
             tr = None
 
