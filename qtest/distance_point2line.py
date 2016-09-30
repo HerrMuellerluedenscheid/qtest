@@ -11,6 +11,7 @@ from pyrocko.guts import List, Object, String, Float
 import progressbar
 import logging
 import sys
+from vtk_graph import vtk_ray, render_actors, vtk_point
 
 logger = logging.getLogger()
 
@@ -97,7 +98,7 @@ class Coupler():
 
         if self.whitelist:
             targets = filter(lambda x: x.codes in self.whitelist, targets)
-    
+
         self.filtrate = Filtrate(
             sources=sources, targets=targets, phases=phases,
             earthmodel=earthmodel, magdiffmax=self.magdiffmax)
@@ -109,51 +110,48 @@ class Coupler():
         logger.info('start coupling events')
         widgets = ['event couples ', progressbar.Percentage(), progressbar.Bar()]
         pb = progressbar.ProgressBar(maxval=len(sources), widgets=widgets).start()
+        actors = []
         for i_e, ev in enumerate(sources):
             #pb.update(i_e)
+            actors.append(vtk_point(self.hookup(ev)))
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
-
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
                 try:
-                    #incidence_angle = arrival[0].incidence_angle()
+                    incidence_angle = arrival[0].incidence_angle()
                     n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
                 except IndexError as err:
                     print '!!!Error> ', err
                     continue
-
                 n = n * cake.d2m
                 e = e * cake.d2m
                 points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
+                actors.append(vtk_ray(points_of_segments, opacity=0.3))
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
                     if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
                         failed += 1
                         continue
-                    try:
-                        traveled_distance, passing_distance, segments = self.get_passing_distance(
+
+                    aout = self.get_passing_distance(
                             points_of_segments, num.array(ned_cmp))
+
+                    if aout:
+                        td, pd, total_td, sgmts = aout
                         passed += 1
-                    except IndexError:
+                        self.filtrate.couples.append( [
+                            ev, cmp_e, t,
+                            float(td), float(pd), float(total_td),
+                            incidence_angle, sgmts])
                         failed += 1
+                    else:
                         continue
-                    #if ignore_segments:
-                    #    segments = []
-                    if traveled_distance:
-                        self.filtrate.couples.append([
-                            ev, cmp_e, t, float(traveled_distance),
-                            float(passing_distance),
-                            #float(self.ray_length(arrival[0])),
-                            None,
-                            #float(incidence_angle)])
-                            None])
-                    #self.results.append(
-                    #    (ev, cmp_e, t, traveled_distance, passing_distance,
-                    #     segments, incidence_angle))
+
             pb.update(i)
             i += 1
         pb.finish()
+        render_actors(actors)
         print 'failed: %s, passed:%s ' % (failed, passed)
         if passed == 0:
             raise Exception('Coupling failed')
@@ -178,13 +176,11 @@ class Coupler():
     def filter_pairs(self, threshold_pass_factor, min_travel_distance, data, ignore=[], max_mag_diff=100):
         filtered = []
         has_segments = True
-        if isinstance(data, Filtrate):
-            has_segments = False
+        #if isinstance(data, Filtrate):
+        #has_segments = False
         for r in data:
-            if has_segments:
-                e1, e2, t, traveled_d, passing_d, segments, incidence_angle = r
-            else:
-                e1, e2, t, traveled_d, passing_d, totald, incidence_angle = r
+            e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
+
             if abs(e1.magnitude-e2.magnitude)>max_mag_diff:
                 continue
 
@@ -205,61 +201,39 @@ class Coupler():
         return filtered
 
     def get_passing_distance(self, ray_points, x0):
-        x1 = ray_points[:, :-1]
-        x2 = ray_points[:, 1:]
-        us = x2-x1
-        us[:, num.where(us==0.)[1]] = num.nan
-        vs = x0-x1
-        ws = x0-x2
+        us = ray_points[:, 1:] - ray_points[:, :-1]
+
+        vs = x0 - ray_points[:, :-1]
+        ws = x0 - ray_points[:, 1:]
+
+        #vs = x0-x1
+        #ws = x0-x2
         u_norms = num.linalg.norm(us, axis=0)
-        ps = num.sum(vs.T*us.T, axis=1) / u_norms**2
+        ps = num.sum(vs*us, axis=0) / u_norms**2
 
         # pp = passing point
         i_pp = num.where(num.logical_and(ps<1, ps>0))[0]
-        if len(i_pp) == 0:
-            # did not pass
-            return False, False, []
 
-        u = us[:, i_pp]
-        p = ps[i_pp]
-        projected_on_u = p * u
-        traveled_distance = num.sum(u_norms[num.where(ps>1)])
-        traveled_distance += num.linalg.norm(projected_on_u)
+        if len(i_pp) != 1:
+            # did not pass
+            return None
+
+        i_pp = i_pp[0]
+        projected_on_u = ps[i_pp] * us[:, i_pp]
+        total_traveled_distance = num.nansum(u_norms)
+        traveled_distance = num.sum(u_norms[:i_pp]) + num.linalg.norm(projected_on_u)
 
         # pp distance to segment
         d_pp = num.linalg.norm(num.cross(vs[:, i_pp], ws[:, i_pp], axis=0)) / u_norms[i_pp]
-        segments = num.hstack((x1[:, :i_pp+1], x1[:, i_pp]+projected_on_u))
-        return traveled_distance, d_pp, segments
-
-
-    def get_passing_distance_old(self, ray_points, x0):
-        passed = False
-        passing_distance = False
-        segments = [(ray_points[0], 0, passed)]
-        traveled_distance = 0
-        for i in xrange(len(ray_points)-1):
-            x1, x2 = ray_points[i:i+2]
-            u = x2-x1
-            u_norm = num.linalg.norm(u)
-            if u_norm == 0.:
-                continue
-
-            v = x0-x1
-            w = x0-x2
-            p = num.dot(v, u) / u_norm**2
-            if p < 0 or p > 1:
-                traveled_distance += u_norm
-                seg = x2
-            else:
-                passing_distance = num.linalg.norm(num.cross(v, w))/u_norm
-                projected_on_u = p * u
-                seg = x1+projected_on_u
-                traveled_distance += num.linalg.norm(projected_on_u)
-                passed = True
-            segments.append((seg, traveled_distance, passing_distance))
-            if passed:
-                break
-        return passed, segments
+        segments = num.hstack(
+            (ray_points[:, :i_pp+1], (ray_points[:, i_pp+1] -
+                                    projected_on_u).reshape(3,1)))
+        #traveled_distance = num.sum(num.linalg.norm(segments.T[1:]-segments.T[:-1], axis=0))
+        #print traveled_distance
+        #r1 = vtk_ray(segments)
+        #r2 = vtk_point(x0)
+        #vtk_render([r1, r2])
+        return traveled_distance, d_pp, total_traveled_distance, segments
 
 
 

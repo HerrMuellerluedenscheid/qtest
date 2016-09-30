@@ -79,7 +79,7 @@ def plot_traces(tr, t_shift=0, ax=None, label='', color='r'):
     ax = ax_if_needed(ax)
     ydata = tr.get_ydata()
     if tr:
-        tr.normalize()
+        tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
         #tr.shift(-tr.tmin)
         ax.plot(tr.get_xdata()+t_shift, tr.get_ydata(), label=label, color=color)
 
@@ -635,7 +635,6 @@ class QInverter:
         self.cc_min = cc_min
         self.onthefly = onthefly
         self.snr_min = snr_min
-        self.snr_min = snr_min
 
     def invert(self):
         self.allqs = []
@@ -687,6 +686,9 @@ class QInverter:
             if self.onthefly:
                 couple.drop_data()
         pb.finish()
+
+    def dump_results(self, fn):
+        num.savetxt(fn, num.array(self.allqs))
 
     def plot(self, ax=None, q_threshold=None, relative_to=None, want_q=False):
         fig = plt.figure(figsize=(4, 4))
@@ -966,6 +968,7 @@ class QInverter:
                 for item in v:
                     f.write("%1.6f \n" % item)
 
+
 def model_plot(mod, ax=None, parameter='qp', cmap='copper', xlims=None):
     cmap = mpl.cm.get_cmap(cmap)
     ax = ax_if_needed(ax)
@@ -1020,363 +1023,6 @@ def plot_response(response, ax=None):
 def wanted_q(mod, z):
     q = mod.layer(z).material(z).qp
     return q
-
-
-def dbtest(noise_level=0.00000000005):
-    print '-------------------db test-------------------------------'
-    use_real_shit = False
-    use_extended_sources = False
-    use_responses = True
-    load_coupler = True
-    fn_coupler = 'dummy_coupling.p'
-    #fn_coupler = 'dummy_coupling.yaml'
-    #fn_coupler = 'pickled_couples.p'
-    #fn_coupler = None
-    test_scenario = True
-    normalize_waveforms = True
-    #want_station = ('cz', 'nkc', '')
-    #want_station = ('cz', 'kac', '')
-    want_station = 'all'
-    lat = 50.2059
-    lon = 12.5152
-    sources = []
-    #method = 'filter'
-    method = 'mtspec'
-    #method = 'sine_psd'
-    if method == 'filter':
-        delta_f = 3.
-        fcs = num.arange(30, 85, delta_f)
-        fwidth = 3
-        filters = [(f, fwidth) for f in fcs]
-    else:
-        filters = None
-    min_magnitude = 2.
-    max_magnitude = 6.
-    fminrange = 20.
-    #use_common = False
-    use_common = True
-    fmax_lim = 80.
-    #zmax = 10700
-    fmin = 35.
-    fmin = Magnitude2fmin.setup(lim=fmin)
-    fmax = 85.
-    #window_by_magnitude = Magnitude2Window.setup(0.8, 1.)
-    window_by_magnitude = Magnitude2Window.setup(0.08, 5.)
-    quantity = 'velocity'
-    store_id = 'qplayground_total_2'
-    #store_id = 'qplayground_total_2_q25'
-    #store_id = 'qplayground_total_2_q400'
-    #store_id = 'qplayground_total_1_hr'
-    #store_id = 'qplayground_total_4_hr'
-    #store_id = 'qplayground_total_4_hr_full'
-    #store_id = 'ahfullgreen_2'
-    #store_id = 'ahfullgreen_4'
-
-    # setting the dc components:
-
-    strikemin = 160
-    strikemax = 180
-    dipmin = -60
-    dipmax = -80
-    rakemin = 20
-    rakemax = 40
-    #strikemin = 170
-    #strikemax = 170
-    #dipmin = -70
-    #dipmax = -70
-    #rakemin = 30
-    #rakemax = 30
-
-    engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
-    print engine
-    #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
-    store = engine.get_store(store_id)
-    config = engine.get_store_config(store_id)
-    mod = config.earthmodel_1d
-
-    gf_padding = 50
-    zmin = config.source_depth_min + gf_padding
-    zmax = config.source_depth_max - gf_padding
-    dist_min = config.distance_min
-    dist_max = config.distance_max
-    channel = 'SHZ'
-    tt_mu = 0.0
-    tt_sigma = 0.01
-    save_figs = True
-    nucleation_radius = 0.1
-
-    # distances used if not real sources:
-    if test_scenario:
-        distances = num.linspace(config.distance_min+gf_padding,
-                                 config.distance_max-gf_padding, 12)
-        source_depths = num.linspace(zmin, zmax, 12)
-    else:
-        distances = num.arange(config.distance_min+gf_padding, config.distance_max-gf_padding, 200)
-        source_depths = num.arange(zmin, zmax, 200)
-
-    perturbation = UniformTTPerturbation(mu=tt_mu, sigma=tt_sigma)
-    #perturbation = None
-    perturbation.plot()
-    plt.show()
-    p_chopper = Chopper('first(p)', phase_position=0.5,
-                        by_magnitude=window_by_magnitude,
-                        phaser=PhasePie(mod=mod))
-    stf_type = 'brunes'
-    #stf_type = 'halfsin'
-    #stf_type =  None
-    #stf_type =  'gauss'
-    tracers = []
-    want_phase = 's'
-    fn_noise = '/media/usb/webnet/mseed/noise.mseed'
-    fn_records = '/media/usb/webnet/mseed'
-    #if use_real_shit:
-    if False:
-        noise = Noise(files=fn_noise, scale=noise_level)
-        noise_pile = pile.make_pile(fn_records)
-    else:
-        #noise = RandomNoiseConstantLevel(noise_level)
-        noise = None
-        noise_pile = None
-
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
-    all_depths = [e.depth for e in events]
-    some_depths = [d/1000. for d in all_depths if d>8500]
-    fig = plt.figure(figsize=(6,6))
-    ax = fig.add_subplot(1, 2, 1)
-    ax.set_title('$q_p$ model')
-    #ax.set_xticks([100, 200, 300])
-    ax.invert_yaxis()
-    ax.set_ylim(0, 12.)
-    plot_model(mod, ax=ax, parameters=['qp'])
-    #ax.axes.get_yaxis().set_visible(False)
-    ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
-
-    #ax = fig.add_subplot(1, 3, 1, sharey=ax)
-    #plot_model(mod, ax=ax, parameters=['vp'])
-    ##cake_plot.sketch_model(mod, ax)
-    #ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
-    #ax.set_ylim(0, 12.)
-    ##ax.set_ylim(0, 12000.)
-    #ax.axes.get_yaxis().set_visible(True)
-
-    ax = fig.add_subplot(1, 2, 2, sharey=ax)
-    ax.set_title('source depths')
-    ax.hist(some_depths, bins=17, orientation='horizontal')
-    ax.set_xlabel('count')
-    ax.set_ylim(0, 12.)
-    ax.axes.get_yaxis().set_visible(False)
-    #ax.yaxis.tick_right()
-    ax.axhspan(min(some_depths), max(some_depths), alpha=0.1)
-    #ax.set_ylim(0, 12000)
-    #plt.gca().xaxis.set_major_locator(mpl.ticker.maxnlocator(prune='lower'))
-    fig.subplots_adjust(wspace=0.11, right=0.98, top=0.94)
-    ax.set_xticks(num.arange(0, 120., 30.))
-    #plt.tight_layout()
-    ax.invert_yaxis()
-    fig.savefig('model_event_depths.png')
-
-    average_depth = num.mean(all_depths)
-    want_q = wanted_q(mod, average_depth)
-    vp = mod.layer(average_depth).material(average_depth).vp
-    #lat = float(num.mean([e.lat for e in events]))
-    #lon = float(num.mean([e.lon for e in events]))
-    stations = model.load_stations('/data/meta/stations.cz.pf')
-    if not want_station=='all':
-        print 'warning: only using station: %s' %'.'.join(want_station)
-        stations = filter(lambda x: want_station == x.nsl(), stations)
-
-
-    if load_coupler:
-        print 'load coupler'
-        filtrate = Filtrate.load_pickle(filename=fn_coupler)
-        sources = filtrate.sources
-        targets = filtrate.targets
-        for t in targets:
-            t.store_id = store_id
-        coupler = Coupler(filtrate)
-        print 'done'
-    else:
-        coupler = Coupler()
-        if use_real_shit is False:
-            target_kwargs = {
-                #'elevation': 0., 'codes': ('cz', 'kvc', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('cz', 'lbc', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('cz', 'kaz', '', channel), 'store_id': store_id}
-                'elevation': 0., 'codes': ('cz', 'vac', '', channel), 'store_id': store_id}
-                #'elevation': 0., 'codes': ('cz', 'nkc', '', channel), 'store_id': store_id}
-            targets = [Target(lat=lat, lon=lon, **target_kwargs)]
-            sources = []
-            for d in distances:
-                d = num.sqrt(d**2/2.)
-                for sd in source_depths:
-                    #mag = float(1.+num.random.random()*0.2)
-                    mag = 1.
-                    strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
-                                                                             dipmin, dipmax,
-                                                                             rakemin, rakemax)
-                    mt = moment_tensor.MomentTensor(strike=strike, dip=dip, rake=rake, magnitude=mag)
-                    e = model.Event(lat=lat, lon=lon, depth=float(sd), moment_tensor=mt)
-                    if use_extended_sources is True:
-                        sources.append(e2extendeds(e, north_shift=float(d),
-                                                   east_shift=float(d),
-                                                   nucleation_radius=nucleation_radius,
-                                                   stf_type=stf_type))
-                    else:
-                        sources.append(e2s(e, north_shift=float(d),
-                                           east_shift=float(d),
-                                           stf_type=stf_type))
-            fig, ax = Animator.get_3d_ax()
-            Animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-            Animator.plot_sources(sources=targets, reference=coupler.hookup, ax=ax)
-
-        elif use_real_shit is True:
-            targets = [s2t(s, channel, store_id=store_id) for s in stations]
-            events = filter(lambda x: x.depth>zmin and x.depth<zmax, events)
-            events = filter(lambda x: x.magnitude>=min_magnitude, events)
-            events = filter(lambda x: x.magnitude<=max_magnitude, events)
-            events = filter(lambda x: x.depth<=zmax, events)
-            for e in events:
-                strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
-                                                                         dipmin, dipmax,
-                                                                         rakemin, rakemax)
-                mt = moment_tensor.MomentTensor(
-                    strike=strike, dip=dip, rake=rake, magnitude=e.magnitude)
-                #mt.magnitude = e.magnitude
-                e.moment_tensor = mt
-            if use_extended_sources is True:
-                sources = [e2extendeds(
-                    e, nucleation_radius=nucleation_radius, stf_type=stf_type)
-                           for e in events]
-            else:
-                sources = [e2s(e, stf_type=stf_type)
-                           for e in events]
-            #for s in sources:
-            #    #strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
-            #    #                                                         dipmin, dipmax,
-            #    #                                                         rakemin, rakemax)
-            #    #s.strike = strike
-            #    #s.dip = dip
-            #    #s.rake = rake
-        if use_responses:
-            associate_responses(
-                glob.glob('responses/resp*'),
-                targets,
-                time=util.str_to_time('2012-01-01 00:00:00.'))
-        #associate_responses(glob.glob('responses/*pz'),
-        #                    targets,
-        #                    time=util.str_to_time('2012-01-01 00:00:00.'),
-        #                    type='polezero')
-
-        #plot_response(response=targets[0].filter.response)
-        logger.info('number of sources: %s' % len(sources))
-        logger.info('number of targets: %s' % len(targets))
-        coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
-                        ignore_segments=True, dump_to=fn_coupler, check_relevance_by=noise_pile)
-    #fig, ax = animator.get_3d_ax()
-    #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate,
-                                         max_mag_diff=0.2)
-    animator = Animator(pairs_by_rays)
-    #plt.show()
-    widgets = ['plotting segments: ', progressbar.Percentage(), progressbar.Bar()]
-    paired_sources = []
-    for p in pairs_by_rays:
-        s1, s2, t, td, pd, totald, incidence_angle = p
-        paired_sources.extend([s1, s2])
-    used_mags = [s.magnitude for s in paired_sources]
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.hist(used_mags)
-    paired_source_dict = paired_sources_dict(paired_sources)
-    animator.plot_sources(sources=paired_source_dict, reference=coupler.hookup, ax=None, alpha=1)
-    #pb = progressbar.progressbar(maxval=len(pairs_by_rays)-1, widgets=widgets).start()
-    #for i_r, r in enumerate(pairs_by_rays):
-    #    e1, e2, t, td, pd, segments = r
-    #    animator.plot_ray(segments, ax=ax)
-    #    pb.update(i_r)
-    #print 'done'
-    #pb.finish()
-    #plt.show()
-    testcouples = []
-    pairs = []
-    for p in pairs_by_rays:
-        s1, s2, t, td, pd, totald, i1 = p
-        fmin2 = None
-        pair = []
-        for sx in [s1, s2]:
-            fmin1 = fmin_by_magnitude(sx.magnitude)
-            if want_phase.upper()=="S":
-                # accounts for fc changes: Abstract
-                # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
-                fmin1 /= 1.5
-
-            #fmax = min(fmax_lim, vp/fresnel_lambda(totald, td, pd))
-            #print 'test me, change channel code id to lqt'
-            #t.dip = -90. + i1
-            #t.azimuth = t.azibazi_to(sx)[1]
-            tracer1 = Tracer(sx, t, p_chopper, channel=channel, fmin=fmin1,
-                             fmax=fmax, want=quantity, 
-                             perturbation=perturbation.perturb(0))
-            tracer1.engine = engine
-            dist1, depth1 = tracer1.get_geometry()
-            if dist1< dist_min or dist1>dist_max:
-                break
-            if fmax-fmin1<fminrange:
-                break
-            pair.append(tracer1)
-            tracers.extend(pair)
-            pairs.append(pair)
-
-        if len(pair)==2:
-            testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
-            testcouple.normalize_waveforms = normalize_waveforms
-            testcouple.ray = p
-            testcouple.filters = filters
-            #testcouple.process(noise=noise)
-            #if len(testcouple.spectra.spectra)!=2:
-            #   logger.warn('not 2 spectra in test couple!!!! why?')
-            #   continue
-            testcouples.append(testcouple)
-    if len(tracers)==0:
-        raise Exception('no tracers survived the assessment')
-
-    #builder = Builder()
-    #tracers = builder.build(tracers, engine=engine, snuffle=False)
-    colors = UniqueColor(tracers=tracers)
-    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    #fig = plt.gcf()
-    #fig.savefig('location_model_db1.png', dpi=200)
-    #plt.show()
-    #widgets = ['processing couples: ', progressbar.Percentage(), progressbar.Bar()]
-    #pb = progressbar.ProgressBar(len(pairs)-1, widgets=widgets).start()
-    #for i_p, pair in enumerate(pairs):
-    #    pb.update(i_p)
-    #    testcouple = SyntheticCouple(master_slave=pair, method=method, use_common=use_common)
-    #    testcouple.ray = r
-    #    testcouple.filters = filters
-    #    testcouple.process(noise=noise)
-    #    if len(testcouple.spectra.spectra)!=2:
-    #        logger.warn('not 2 spectra in test couple!!!! why?')
-    #        continue
-    #    testcouples.append(testcouple)
-    #pb.finish()
-    #testcouples = filter(lambda x: x.good==True, testcouples)
-    #outfn = 'testimage'
-    #plt.gcf().savefig('output/%s.png' % outfn)
-    inverter = QInverter(couples=testcouples, onthefly=True, cc_min=0.8)
-    inverter.invert()
-    for i, testcouple in enumerate(num.random.choice(testcouples, 30)):
-        fn = 'synthetic_tests/%s/example_%s_%s.png' % (want_phase, store_id, str(i).zfill(2))
-        print fn
-        testcouple.plot(infos=infos, colors=colors, noisy_q=False, savefig=fn)
-    inverter.plot()
-    #inverter.plot(q_threshold=800, relative_to='median', want_q=want_q)
-    fig = plt.gcf()
-    plt.tight_layout()
-    fig.savefig('synthetic_tests/%s/hist_db%s.png' %(want_phase, store_id), dpi=200)
-    #location_plots(tracers, colors=colors, background_model=mod, parameter='vp')
-    inverter.analyze()
-    plt.show()
 
 
 def reset_events(markers, events):

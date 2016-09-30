@@ -47,7 +47,7 @@ pjoin = os.path.join
 logger = logging.getLogger('root')
 diff_response = trace.DifferentiationResponse()
 tr_meta_init = {'noisified': False}
-_taper = trace.CosFader(xfrac=0.1)
+_taper = trace.CosFader(xfrac=0.3)
 
 
 def spectralize(tr, method='mtspec', **kwargs):
@@ -486,7 +486,7 @@ def _do_nothing(x):
     return x
 
 class Tracer:
-    def __init__(self, source, target, chopper, channel='v', *args, **kwargs):
+    def __init__(self, source, target, chopper, channel='v', engine=None, *args, **kwargs):
         ''':param channel: qseis channel'''
         self.runner = None
         self.source = source
@@ -507,7 +507,7 @@ class Tracer:
         self.fmax = kwargs.pop('fmax', 99999.)
 
         self._apply_transfer = self.prepare_quantity(self.want)
-        self.engine = None
+        self.engine = engine
 
     def prepare_quantity(self, want):
         if want == 'velocity':
@@ -638,6 +638,23 @@ class Tracer:
         else:
             raise Exception('not yet processed')
 
+    def signal_power(self, tr):
+        ydata = tr.ydata
+        return num.sum(ydata**2)/(tr.tmax-tr.tmin)
+
+    def snr(self, offset=-3.):
+        # for now, simply return a large number.
+        # Consequence is that in synthetic tests no couple will be rejected
+        return 1000000000.
+        #return self.signal_power(t1)/self.signal_power(t2)
+
+    def noise_trace(self, offset):
+        tr = self.chopper.chop_pile(
+            self.data_pile, self.source, self.target, self.want_channel,
+            offset=offset)
+        tr.ydata /= self.normalization_factor
+        return tr
+
 
 class QSeisTraces(Tracer):
     def __init__(self, *args, **kwargs):
@@ -700,18 +717,19 @@ class AhfullgreenTracer(Tracer):
 
 class DataTracer(Tracer):
     def __init__(self, incidence_angle=0., data_pile=None,
-                 rotate_channels=False, **kwargs):
+                 rotate_channels=False, want_channel='*Z', **kwargs):
         kwargs.update({'no_config': True})
         Tracer.__init__(self, **kwargs)
         self.data_pile = data_pile
         self.rotate_channels = rotate_channels
         self.incidence_angle = incidence_angle
         self.back_azimuth = self.target.azibazi_to(self.source)[1]
+        self.want_channel = want_channel
 
     def setup_data(self, normalize=False, *args, **kwargs):
         if self.rotate_channels:
             trs = self.chopper.chop_pile(
-                self.data_pile, self.source, self.target, all_channels=True)
+                self.data_pile, self.source, self.target, self.want_channel)
             if trs is None:
                 tr = False
             else:
@@ -722,7 +740,7 @@ class DataTracer(Tracer):
                 tr = filter(tr.channel==self.channel, trs)
         else:
             tr = self.chopper.chop_pile(
-                self.data_pile, self.source, self.target, all_channels=False)
+                self.data_pile, self.source, self.target, self.want_channel)
             if tr is None:
                 tr = False
             else:
@@ -742,20 +760,9 @@ class DataTracer(Tracer):
     def label(self):
         return '%s/%s' % (util.tts(self.source.time), ".".join(self.target.codes))
 
-    def signal_power(self, tr):
-        ydata = tr.ydata
-        return num.sum(ydata**2)/(tr.tmax-tr.tmin)
-
-    def snr(self, offset=-0.5, normalize=False):
-        t1 = self.processed
-        t2 = self.noise_trace(offset)
-        #print self.signal_power(t1)/self.signal_power(t2)
-        #trace.snuffle([t1, t2])
-        return self.signal_power(t1)/self.signal_power(t2)
-
     def noise_trace(self, offset):
         tr = self.chopper.chop_pile(
-            self.data_pile, self.source, self.target, all_channels=True,
+            self.data_pile, self.source, self.target, self.want_channel,
             offset=offset)
         tr.ydata /= self.normalization_factor
         return tr
@@ -798,12 +805,13 @@ class Chopper():
             return "NoData"
         return tr
 
-    def chop_pile(self, data_pile, source, target, all_channels=False,
+    def chop_pile(self, data_pile, source, target, want_channel,
                   offset=0.):
-        tstart = self.phase_pie.t(self.startphasestr, (source, target))
+        tstart = self.phase_pie.t(self.startphasestr, (source, target.codes[:3]))
         if not tstart:
-            logger.debug('no phase: %s - %s' % (util.tts(source.time),
-                                                '.'.join(target.codes)))
+            logger.debug('no phase: %s, %s - %s' % (self.startphasestr, 
+                                                util.tts(source.time),
+                                                '.'.join(target.codes[:3])))
             return tstart
         tstart += source.time
         if self.by_magnitude!=None:
@@ -815,19 +823,19 @@ class Chopper():
         tstart += offset
         tend += offset
 
-        if all_channels:
+        if not want_channel:
             select = lambda x: util.match_nslc('*.{station}.*.*'.format(
                     station=target.codes[1]), x.nslc_id)
         else:
-            select = lambda x: util.match_nslc('*.{station}.*.{channel}'.format(
-                    station=target.codes[1], channel=target.codes[3]), x.nslc_id)
+            select = lambda x: util.match_nslc('*.{station}.*.*{channel}'.format(
+                    station=target.codes[1], channel=want_channel), x.nslc_id)
         #else:
         #    select = lambda x: x.nslc_id[:3] == target.codes[:3]
         #else:
         #    select = lambda x: x.nslc_id[:3] == target.codes[:3]
 
         try:
-            add = (tend-tstart) * 0.15
+            add = (tend-tstart) * 0.1
 
             tstart -= add/2.
             tend += add/2.
@@ -879,7 +887,7 @@ class Chopper():
         try:
             return self.phase_pie.arrival(self.startphasestr, (s.depth, s.distance_to(t)))
         except AttributeError:
-            return self.phase_pie.arrival(self.startphasestr, (s, t))
+            return self.phase_pie.arrival(self.startphasestr, (s, t.codes[:3]))
 
 class QResponse(trace.FrequencyResponse):
     def __init__(self, Q, x, v):
