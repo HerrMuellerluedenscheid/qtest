@@ -1,4 +1,5 @@
 import vtk
+import numpy as num
 from vtk.util import numpy_support
 
 
@@ -8,8 +9,61 @@ def numpy_to_vtk(a):
     data.SetNumberOfComponents(3)
     return data
 
-def vtk_point(pnts, scale):
-    '''pnts: numpy array of length 3'''
+
+def vtk_grid(pnts, xg, yg, zg, normalize=True):
+    '''
+    :param pnts: matrix of size (len(xg), len(yg), len(zg)) with scales
+    :param xg, yg, zg: coordinates vectors.'''
+    actors = []
+    if normalize:
+        pntsmax = num.max(pnts)
+    else:
+        pntsmax = 1.
+
+    for ix, xi in enumerate(xg):
+        for iy, yi in enumerate(yg):
+            for iz, zi in enumerate(zg):
+                scale = 0.2 + 4.*(pnts[ix, iy, iz]/pntsmax)
+                actors.append(
+                    vtk_point(num.array((xi, yi, zi)),
+                                        scale=scale))
+    return actors
+
+
+def vtk_points(pnts, cube_size=10):
+    '''pnts: numpy array of length (3, X) '''
+    data = numpy_to_vtk(pnts)
+    s = vtk.vtkPoints()
+    s.SetData(data)
+
+    cs = vtk.vtkCubeSource()
+    cs.SetXLength(cube_size)
+    cs.SetYLength(cube_size)
+    cs.SetZLength(cube_size)
+
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(s)
+
+    # the glyph filter giving shape to the points:
+    g = vtk.vtkGlyph3D()
+    g.SetScaleModeToDataScalingOff()
+    g.SetInput(polydata)
+    g.SetSource(cs.GetOutput())
+
+    mapper = vtk.vtkPolyDataMapper()
+    mapper.SetInputConnection(g.GetOutputPort())
+
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    actor.GetProperty().SetPointSize(100)
+
+    return actor
+
+
+def vtk_point(pnts, scale=1):
+    '''pnts: numpy array of length 3
+
+    actually, it's a sphere not a point'''
     data = numpy_to_vtk(pnts)
     s = vtk.vtkSphereSource()
     s.SetCenter(*pnts)
@@ -21,6 +75,7 @@ def vtk_point(pnts, scale):
     actor = vtk.vtkActor()
     actor.SetMapper(mapper)
     return actor
+
 
 def vtk_ray(pnts, opacity=1.):
     '''pnts: numpy array of shape (3, X) for X is number of points.
