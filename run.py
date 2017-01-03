@@ -173,7 +173,7 @@ def wanted_q(mod, z):
 
 
 def dbtest(config):
-    noise_level=1.
+    noise_level=1E-8
     print '-------------------db test-------------------------------'
     use_real_shit = True
     use_extended_sources = False
@@ -207,14 +207,9 @@ def dbtest(config):
     fmin = Magnitude2fmin.setup(lim=config.fmin_lim)
     #window_by_magnitude = Magnitude2Window.setup(0.8, 1.)
     window_by_magnitude = Magnitude2Window.setup(0.08, 5.)
-    #store_id = 'qplayground_total_2'
-    #store_id = 'qplayground_total_2_q25'
-    #store_id = 'qplayground_total_2_q400'
-    #store_id = 'qplayground_total_1_hr'
-    #store_id = 'qplayground_total_4_hr'
-    store_id = 'qplayground_total_4_hr_full'
-    #store_id = 'ahfullgreen_2'
-    #store_id = 'ahfullgreen_4'
+    print config
+    test_config = config.synthetic_config
+    store_id = test_config.store_id
 
     # setting the dc components:
 
@@ -231,7 +226,8 @@ def dbtest(config):
     #rakemin = 30
     #rakemax = 30
 
-    engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
+    #engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
+    engine = LocalEngine(store_superdirs=test_config.store_superdirs)
     print engine
     #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
     store = engine.get_store(store_id)
@@ -243,10 +239,8 @@ def dbtest(config):
     zmax = gf_config.source_depth_max - gf_padding
     dist_min = gf_config.distance_min
     dist_max = gf_config.distance_max
-    channel = 'SHZ'
     tt_mu = 0.0
-    tt_sigma = 0.01
-    save_figs = True
+    tt_sigma = 0.2
     nucleation_radius = 0.1
 
     # distances used if not real sources:
@@ -271,12 +265,14 @@ def dbtest(config):
     #stf_type =  None
     #stf_type =  'gauss'
     tracers = []
-    want_phase = 's'
-    fn_noise = '/media/usb/webnet/mseed/2008/noise.mseed'
+    channels = {'P': 'SHZ', 'S': 'SHN' }
+    channel = channels[config.want_phase.upper()]
+    #fn_noise = '/home/marius/src/qtest/noise' #/*.mseed'
     fn_records = '/media/usb/webnet/mseed'
     #if use_real_shit:
-    if True:
-        noise = Noise(files=fn_noise, scale=noise_level)
+    if test_config.noise_files:
+        noise = Noise(files=test_config.noise_files, scale=noise_level,
+                      selectby=['station', 'channel'])
         data_pile = pile.make_pile(fn_records)
     else:
         #noise = RandomNoiseConstantLevel(noise_level)
@@ -381,22 +377,15 @@ def dbtest(config):
             else:
                 sources = [e2s(e, stf_type=stf_type)
                            for e in events]
-            #for s in sources:
-            #    #strike, dip, rake = moment_tensor.random_strike_dip_rake(strikemin, strikemax,
-            #    #                                                         dipmin, dipmax,
-            #    #                                                         rakemin, rakemax)
-            #    #s.strike = strike
-            #    #s.dip = dip
-            #    #s.rake = rake
         if use_responses:
-            associate_responses(
-                glob.glob('responses/resp*'),
-                targets,
-                time=util.str_to_time('2012-01-01 00:00:00.'))
-        #associate_responses(glob.glob('responses/*pz'),
-        #                    targets,
-        #                    time=util.str_to_time('2012-01-01 00:00:00.'),
-        #                    type='polezero')
+            #associate_responses(
+            #    glob.glob('responses/resp*'),
+            #    targets,
+            #    time=util.str_to_time('2012-01-01 00:00:00.'))
+            associate_responses(glob.glob('/home/marius/src/qtest/responses/*pz'),
+                                targets,
+                                time=util.str_to_time('2012-01-01 00:00:00.'),
+                                type='polezero')
 
         #plot_response(response=targets[0].filter.response)
         logger.info('number of sources: %s' % len(sources))
@@ -405,12 +394,13 @@ def dbtest(config):
             dump_to = fn_coupler
         else:
             dump_to = None
-        coupler.process(sources, targets, mod, [want_phase, want_phase.lower()],
-                        ignore_segments=False, dump_to=fn_coupler,
+        coupler.process(sources, targets, mod, [config.want_phase, config.want_phase.lower()],
+                        ignore_segments=False, dump_to=dump_to,
                         check_relevance_by=data_pile)
     #fig, ax = animator.get_3d_ax()
     #animator.plot_sources(sources=sources, reference=coupler.hookup, ax=ax)
-    pairs_by_rays = coupler.filter_pairs(4, 1000, data=coupler.filtrate,
+    pairs_by_rays = coupler.filter_pairs(2, config.traversing_distance_min,
+                                         data=coupler.filtrate,
                                          max_mag_diff=config.magdiffmax)
     paired_sources = []
     for p in pairs_by_rays:
@@ -423,7 +413,8 @@ def dbtest(config):
 
     testcouples = []
     for r in pairs_by_rays:
-        s1, s2, t, td, pd, totald, i1, segments = r
+        s1, s2, t, td, pd, totald, i1, ray_segment = r
+        #s1, s2, t, td, pd, totald, i1, segments = r
         #if (s1, t) not in checked_rays.keys():
         #    actors.append(vtk_ray(segments))
         #    checked_rays[(s1, t)] = 1
@@ -433,27 +424,28 @@ def dbtest(config):
 
         fmax = min(vp/fresnel_lambda(totald, td, pd), config.fmax_lim)
         fmin1 = fmin_by_magnitude(s1.magnitude)
-        if config.want_phase.upper()=="S":
-            # accounts for fc changes: Abstract
-            # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
-            fmin1 /= 1.5
+        #if config.want_phase.upper()=="S":
+        #    # accounts for fc changes: Abstract
+        #    # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
+        #    fmin1 /= 1.5
         tracer1 = Tracer(s1, t, p_chopper, channel=channel, fmin=fmin1,
-                         fmax=fmax, want=quantity, 
+                         fmax=fmax, want=quantity,
                          perturbation=perturbation.perturb(0),
-                         engine=engine)
+                         engine=engine, noise=noise)
 
         fmin2 = fmin_by_magnitude(s2.magnitude)
         tracer2 = Tracer(s2, t, p_chopper, channel=channel, fmin=fmin1,
                          fmax=fmax, want=quantity, 
                          perturbation=perturbation.perturb(0),
-                         engine=engine)
+                         engine=engine, noise=noise)
         if fmax-fmin1<config.fminrange or fmax-fmin2<config.fminrange:
             print fmax-fmin1, fmax-fmin2
             continue
         else:
             pair = [tracer1, tracer2]
             testcouple = SyntheticCouple(master_slave=pair,
-                                         method=config.method, use_common=use_common)
+                                         method=config.method, use_common=use_common,
+                                         ray_segment=ray_segment)
             testcouple.normalize_waveforms = True
             testcouple.ray = r
             testcouple.filters = filters
@@ -467,21 +459,20 @@ def dbtest(config):
     inverter.invert()
     good_results = filter(lambda x: x.invert_data is not None, testcouples)
     for i, tc in enumerate(num.random.choice(good_results, 30)):
-        fn = util.ensuredirs('%s/%s/example_%s.png' % (config.output,
-                                                       config.want_phase,
+        fn = util.ensuredirs('%s/example_%s.png' % (config.output,
                                                        str(i).zfill(2)))
         tc.plot(infos=infos, colors=colors, savefig=fn)
     inverter.plot()
-    fn_results = '%s/%s/results.txt' % (config.output, config.want_phase)
+    fn_results = '%s/results.txt' % (config.output)
     util.ensuredirs(fn_results)
     inverter.dump_results(fn_results)
 
-    fn_hist = '%s/%s/hist_application.png' % (config.output, config.want_phase)
+    fn_hist = '%s/hist_application.png' % (config.output)
     util.ensuredirs(fn_hist)
     fig = plt.gcf()
     fig.savefig(fn_hist, dpi=600)
 
-    fn_analysis = "%s/%s/q_fit_analysis" % (config.output, config.want_phase)
+    fn_analysis = "%s/q_fit_analysis" % (config.output)
     util.ensuredirs(fn_analysis)
     inverter.analyze(fnout_prefix=fn_analysis)
 
@@ -645,12 +636,16 @@ def run(config):
             dump_to = fn_coupler
         else:
             dump_to = None
+
         coupler.process(
             sources, targets, mod, [config.want_phase, config.want_phase.lower()],
-            ignore_segments=False, dump_to=fn_coupler)
+            check_relevance_by=data_pile,
+            ignore_segments=False, dump_to=dump_to)
 
-    pairs_by_rays = coupler.filter_pairs(2.5, 100., data=coupler.filtrate,
-                                         ignore=ignore, max_mag_diff=config.magdiffmax)
+    pairs_by_rays = coupler.filter_pairs(2., config.traversing_distance_min,
+                                         data=coupler.filtrate,
+                                         ignore=ignore,
+                                         max_mag_diff=config.magdiffmax)
 
     testcouples = []
     actors = []
@@ -666,10 +661,10 @@ def run(config):
 
         fmax = min(vp/fresnel_lambda(totald, td, pd), config.fmax_lim)
         fmin1 = fmin_by_magnitude(s1.magnitude)
-        if config.want_phase.upper()=="S":
-            # accounts for fc changes: Abstract
-            # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
-            fmin1 /= 1.5
+        #if config.want_phase.upper()=="S":
+        #    # accounts for fc changes: Abstract
+        #    # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
+        #    fmin1 /= 1.5
         tracer1 = DataTracer(data_pile=data_pile, source=s1, target=t,
                              chopper=p_chopper, want_channel=channel, fmin=fmin1,
                              fmax=fmax, incidence_angle=i1)
@@ -706,7 +701,7 @@ def run(config):
     inverter.plot()
 
     fn_results = '%s/results.txt' % config.output
-    util.ensuredir(fn_results)
+    util.ensuredirs(fn_results)
     inverter.dump_results(fn_results)
 
     fig = plt.gcf()
