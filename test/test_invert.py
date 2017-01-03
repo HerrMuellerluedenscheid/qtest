@@ -147,11 +147,6 @@ class TomoTestCase(unittest.TestCase):
         # G = ti        (i: index of voxel)
         # d = slopej    (j: index of couple)
 
-
-        # measurements:
-        # has to have dimensions of model!
-        #tstars = num.array([0.01, 0.02])
-
         def search(m_test):
             n_G = len(G)
             tstars = num.zeros(n_G)
