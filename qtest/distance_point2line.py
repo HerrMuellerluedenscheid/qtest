@@ -11,6 +11,7 @@ from pyrocko.guts import List, Object, String, Float
 import progressbar
 import logging
 import sys
+from qtest.invert import Ray3D, Ray3DDiscretized
 from vtk_graph import vtk_ray, render_actors, vtk_point
 
 logger = logging.getLogger()
@@ -118,33 +119,44 @@ class Coupler():
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
                 arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
+                incidence_angle = arrival[0].incidence_angle()
                 try:
-                    incidence_angle = arrival[0].incidence_angle()
-                    n, e, d = project2enz(arrival[0], ev.azibazi_to(t)[0])
+                    n, e, d, travel_times = project2enz(arrival[0], ev.azibazi_to(t)[0])
                 except IndexError as err:
                     print '!!!Error> ', err
                     continue
+
                 n = n * cake.d2m
                 e = e * cake.d2m
+                #if False:
+                    # old version
                 points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
-                actors.append(vtk_ray(points_of_segments, opacity=0.3))
+
+                #else:
+                #    r = Ray3D.from_RayPath(arrival[0])
+                #    r.set_carthesian_coordinates(*self.hookup(ev))
+                #    #r.set_carthesian_coordinates(n, e, d)
+                #    points_of_segments = num.array(r.orientate3d()[:3])
+
+                #actors.append(vtk_ray(points_of_segments, opacity=0.3))
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
                     if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
                         failed += 1
                         continue
 
-                    aout = self.get_passing_distance(
+                    aout = get_passing_distance(
                             points_of_segments, num.array(ned_cmp))
 
                     if aout:
                         td, pd, total_td, sgmts = aout
+                        ray = Ray3DDiscretized(*sgmts, t=travel_times[:len(sgmts)])
+                        #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
                         passed += 1
                         self.filtrate.couples.append( [
                             ev, cmp_e, t,
                             float(td), float(pd), float(total_td),
-                            incidence_angle, sgmts])
-                        failed += 1
+                            incidence_angle, ray])
                     else:
                         continue
 
@@ -200,40 +212,40 @@ class Coupler():
         print '%s of %s pairs passed' %(len(filtered), len(data))
         return filtered
 
-    def get_passing_distance(self, ray_points, x0):
-        us = ray_points[:, 1:] - ray_points[:, :-1]
+def get_passing_distance(ray_points, x0):
+    us = ray_points[:, 1:] - ray_points[:, :-1]
 
-        vs = x0 - ray_points[:, :-1]
-        ws = x0 - ray_points[:, 1:]
+    vs = x0 - ray_points[:, :-1]
+    ws = x0 - ray_points[:, 1:]
 
-        #vs = x0-x1
-        #ws = x0-x2
-        u_norms = num.linalg.norm(us, axis=0)
-        ps = num.sum(vs*us, axis=0) / u_norms**2
+    #vs = x0-x1
+    #ws = x0-x2
+    u_norms = num.linalg.norm(us, axis=0)
+    ps = num.sum(vs*us, axis=0) / u_norms**2
 
-        # pp = passing point
-        i_pp = num.where(num.logical_and(ps<1, ps>0))[0]
+    # pp = passing point
+    i_pp = num.where(num.logical_and(ps<1, ps>0))[0]
 
-        if len(i_pp) != 1:
-            # did not pass
-            return None
+    if len(i_pp) != 1:
+        # did not pass
+        return None
 
-        i_pp = i_pp[0]
-        projected_on_u = ps[i_pp] * us[:, i_pp]
-        total_traveled_distance = num.nansum(u_norms)
-        traveled_distance = num.sum(u_norms[:i_pp]) + num.linalg.norm(projected_on_u)
+    i_pp = i_pp[0]
+    projected_on_u = ps[i_pp] * us[:, i_pp]
+    total_traveled_distance = num.nansum(u_norms)
+    traveled_distance = num.sum(u_norms[:i_pp]) + num.linalg.norm(projected_on_u)
 
-        # pp distance to segment
-        d_pp = num.linalg.norm(num.cross(vs[:, i_pp], ws[:, i_pp], axis=0)) / u_norms[i_pp]
-        segments = num.hstack(
-            (ray_points[:, :i_pp+1], (ray_points[:, i_pp+1] -
-                                    projected_on_u).reshape(3,1)))
-        #traveled_distance = num.sum(num.linalg.norm(segments.T[1:]-segments.T[:-1], axis=0))
-        #print traveled_distance
-        #r1 = vtk_ray(segments)
-        #r2 = vtk_point(x0)
-        #vtk_render([r1, r2])
-        return traveled_distance, d_pp, total_traveled_distance, segments
+    # pp distance to segment
+    d_pp = num.linalg.norm(num.cross(vs[:, i_pp], ws[:, i_pp], axis=0)) / u_norms[i_pp]
+    segments = num.hstack(
+        (ray_points[:, :i_pp+1], (ray_points[:, i_pp+1] -
+                                projected_on_u).reshape(3,1)))
+    #traveled_distance = num.sum(num.linalg.norm(segments.T[1:]-segments.T[:-1], axis=0))
+    #print traveled_distance
+    #r1 = vtk_ray(segments)
+    #r2 = vtk_point(x0)
+    #vtk_render([r1, r2])
+    return traveled_distance, d_pp, total_traveled_distance, segments
 
 
 
@@ -326,7 +338,7 @@ def project2enz(arrival, azimuth_deg):
     z, y, t = arrival.zxt_path_subdivided()
     e = num.sin(azimuth) * y[0]
     n = num.cos(azimuth) * y[0]
-    return n, e, z[0]
+    return n, e, z[0], t
 
 
 def stats_by_station(results):
