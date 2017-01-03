@@ -17,7 +17,7 @@ if __name__=='__main__':
     import matplotlib.pylab as pylab
     from math import pi
 
-    mls = random.random(1000)*4.
+    mls = num.random.random(1000)*4.
     a = radius(mls)
     pylab.plot(mls, a, '+')
     pylab.ylabel('Radius [m]')
