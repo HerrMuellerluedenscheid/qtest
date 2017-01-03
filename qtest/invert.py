@@ -1,11 +1,8 @@
-import time
 import numpy as num
 from scipy.optimize import basinhopping
 
 from lassie import grid
 from pyrocko.cake import evenize_path, Ray, d2m
-from pyrocko.orthodrome import azimuth_numpy
-from qtest.distance_point2line import project2enz
 from functools import reduce
 
 
@@ -18,7 +15,7 @@ def kernel(Matrix_TD_i, Matrix_TD_j, model_vector, slopes):
 
     slopes = slopes from spectral ratios
     '''
-    return (Matrix_TD_i - Matrix_TD_j ) * model_vector - slopes
+    return (Matrix_TD_i - Matrix_TD_j) * model_vector - slopes
 
 
 class Couple():
@@ -28,17 +25,15 @@ class Couple():
 
         self.slope = None
 
+    @property
+    def dd_ray_segment(self):
+        ''' The TD - part of one of the rays'''
+
 
 class Ray3D(Ray):
     ''' Inherts from cake.RayPath. Extended by third dimension.'''
     def __init__(self, lat=0., lon=0., azimuth=0., *args, **kwargs):
         Ray.__init__(self, *args, **kwargs)
-        self.set_coordinates(lat, lon, azimuth)
-
-    def set_coordinates(self, lat, lon, azimuth):
-        self.lat_origin = lat
-        self.lon_origin = lon
-        self.azimuth = azimuth
 
     def set_carthesian_coordinates(self, nshift=0., eshift=0., zshift=0., azimuth=0.):
         ''' Set the carthesian departure point of the ray'''
@@ -48,14 +43,7 @@ class Ray3D(Ray):
         self.azimuth = azimuth
 
     @property
-    def lat_target(self):
-        pass
-
-    @property
-    def lon_target(self):
-        pass
-
-    def orientate3d(self):
+    def nezt(self):
         z, x, t = self.zxt_path_subdivided()
         az = self.azimuth/180.*num.pi
         x[0] *= d2m
@@ -68,12 +56,25 @@ class Ray3D(Ray):
         return n, e, z, t[0]
 
     def evenized_path(self, delta):
-        return evenize_path(*self.orientate3d(), delta=delta)
+        return evenize_path(*nezt, delta=delta)
 
     @classmethod
     def from_RayPath(cls, ray):
         o = cls(0., 0., 0., ray.path, ray.p, ray.x, ray.t, ray.endgaps, ray.draft_pxt)
         return o
+
+
+class Ray3DDiscretized(Ray3D):
+
+    def __init__(self, n, e, z, t):
+        self.n = n
+        self.e = e
+        self.z = z
+        self.t = t
+
+    @property
+    def nezt(self):
+        return self.n, self.e, self.z, self.t
 
 
 def distance3d_broadcast(location_array1, location_array2):
@@ -119,7 +120,6 @@ class DiscretizedModelNNInterpolation(RayCastModel):
 
         This will be used to construct the Matrix_TD as input for the kernel.
         '''
- 
 
         # Ray coordinates
         n, e, d, t = ray.evenized_path(self.path_discretization_delta)

@@ -1,33 +1,27 @@
-import matplotlib as mpl
+import numpy as num
+import os
+import progressbar
+import logging
+
+import matplotlib as mpl # noqa
 mpl.use('Agg')
 mpl.rc('ytick', labelsize=10)
 mpl.rc('xtick', labelsize=10)
-import matplotlib.pyplot as plt
+
+import matplotlib.pyplot as plt # noqa
 plt.style.use('ggplot')
-import numpy as num
-import os
-import glob
-import progressbar
-import logging
-from pyrocko.gf import Target, LocalEngine
+from pyrocko.gf import Target
 from pyrocko import orthodrome
-from pyrocko.gui_util import PhaseMarker
-from pyrocko import util
-from pyrocko import cake, model
-from pyrocko import pile
-from pyrocko import moment_tensor
+from pyrocko import cake
 from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, basinhopping
 from scipy import signal, interpolate
-from qtest.micro_engine import DataTracer, Tracer, Builder
-from qtest.micro_engine import Noise, Chopper, DDContainer
-from qtest.micro_engine import associate_responses, UniformTTPerturbation
+from qtest.micro_engine import DataTracer, DDContainer
 from autogain.autogain import PhasePie, PickPie
-from distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
+from distance_point2line import Coupler, Animator
 from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
-from util import e2extendeds, e2s, s2t
 
 
 logging.basicConfig(level=logging.INFO)
@@ -311,7 +305,7 @@ class Spectra(DDContainer):
 
 
 class SyntheticCouple():
-    def __init__(self, master_slave, method='mtspec', use_common=False):
+    def __init__(self, master_slave, method='mtspec', use_common=False, ray_segment=None):
         self.method = method
         self.master_slave = master_slave
         self.spectra = Spectra()
@@ -320,6 +314,7 @@ class SyntheticCouple():
         self.colors = None
         self.good = True
         self.use_common = use_common
+        self.ray_segment = ray_segment
         self.repeat = 0
         self.noise_level = 0
         self.invert_data = None
@@ -626,6 +621,50 @@ def spectral_ratio(couple):
     return interc, slope, f_use, a_s, r, p, std
 
 
+class QInverter3D:
+    ''' Uses only the significant bit of the ray segment.'''
+    def __init__(self, couples, discretized_grid):
+        if len(couples)==0:
+            raise Exception('Empty list of test couples')
+
+        # Matrix G. This matrix is equivalent to the times a voxel is
+        # penetrated by a ray, or the time a ray spends inside a certain voxel.
+        self.weights = []
+
+        # Matrix d, which is equivalent to the measured t* of that ray segment.
+        self.slopes = []
+
+        logger.info('Evaluating model weights...')
+        for couple in couples:
+            w = discretized_grid.cast_ray(couple.ray_segment, return_quantity='times')
+            self.weights.append(w)
+
+            interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
+            self.slopes.append(slope)
+        logger.info('Evaluating model weights finished')
+
+    def invert(self):
+        ''' run the inversion'''
+
+        def search(test_model):
+            ''':param test_model: flattened model instance'''
+
+            n_G = len(self.weights)
+            tstars = num.zeros(n_G)
+            errors = num.zeros(n_G)
+            for ig in range(n_G):
+                # t* = sum(t * q)
+                tstar_theo = num.sum(self.weights[ig] * test_model)
+                errors[ig] = tstar_theo - slopes[ig]
+
+            # L1 norm
+            return num.sum(num.abs(errors))
+
+        nx, ny, nz = test_model._shape
+        initial_guess = num.ones(nx*ny*nz) * 500.
+
+        self.result = basinhopping(search, initial_guess)
+        print self.result
 
 class QInverter:
     def __init__(self, couples, cc_min=0.8, onthefly=False, snr_min=0.):
