@@ -116,20 +116,18 @@ def spectralize(tr, method='mtspec', **kwargs):
         #pad_length = (_tr.tmax - _tr.tmin) * 0.5
         #_tr.extend(_tr.tmin-pad_length, _tr.tmax+pad_length)
         #trace.snuffle([_tr, tr])
-        #import pdb
-        #pdb.set_trace()
         ydata = tr.get_ydata()
         ydata = num.asarray(ydata, dtype=num.float)
         tr.set_ydata(ydata/num.max(num.abs(ydata)))
         a, f = mtspec(data=tr.ydata,
                       delta=tr.deltat,
-                      number_of_tapers=10,
+                      number_of_tapers=7,
                       #number_of_tapers=12,
                       #number_of_tapers=2,
-                      time_bandwidth=5.,
+                      time_bandwidth=4.,
                       #time_bandwidth=7.5,
                       #time_bandwidth=10.,
-                      nfft=trace.nextpow2(len(tr.get_ydata()))*4,
+                      nfft=trace.nextpow2(len(tr.get_ydata())),
                       quadratic=True,
                       statistics=False)
         a = num.sqrt(a)
@@ -208,12 +206,30 @@ class UniformTTPerturbation(TTPerturbation):
         return t + num.random.uniform(self.low, self.high)
 
 
+def evaluate_by(nslc_id, by):
+    key = []
+
+    if not by:
+        return nslc_id
+    n, s, l, c = nslc_id
+    if 'network' in by:
+        key.append(n)
+    if 'station' in by:
+        key.append(s)
+    if 'location' in by:
+        key.append(l)
+    if 'channel' in by:
+        key.append(c)
+    return tuple(key)
+
+
 def associate_responses(fns, targets, time=0, type='evalresp'):
     '''
     :param instant: time for which response to be evaluated
     '''
     if len(fns) == 0:
-        logger.warn('no files found')
+        logger.warn('! No response files found !')
+
     for fn in fns:
         if type == 'evalresp':
             codes = tuple(fn.split('/')[-1].split('.')[1:])
@@ -222,13 +238,20 @@ def associate_responses(fns, targets, time=0, type='evalresp'):
 
         if type == 'polezero':
             zeros, poles, constant = pz.read_sac_zpk(fn)
+            logger.warn('ADD ONE ZERO TO PZ RESPONSE => Velocity')
+
+            zeros.append(0+0j)
             sc = fn.split('/')[-1].split('.')[:2]
             codes = ('CZ', sc[0], '', sc[1])
             #codes = tuple(('CZ', ) + tuple(sc))
             #poles = [p/(2*num.pi) for p in poles]
             response = trace.PoleZeroResponse(poles=poles, zeros=zeros, constant=num.complex(constant))
+
         for t in targets:
-            if t.codes == codes:
+            k1 = evaluate_by(t.codes, ['station', 'channel'])
+            k2 = evaluate_by(codes, ['station', 'channel'])
+            #if t.codes == codes:
+            if k1 == k2:
                 t.filter = ResponseFilter(response=response)
                 logger.info('resp-file: %s <---> target: %s' %(codes, t.codes))
                 break
@@ -240,51 +263,59 @@ def associate_responses(fns, targets, time=0, type='evalresp'):
             logger.warn('Target %s does not carry response info' % str(t.codes))
 
 
-
 class Noise():
-    def __init__(self, files, scale=1.):
-        traces = io.load(files)
+    def __init__(self, files, scale=1., selectby=None):
+        traces = [io.load(fn) for fn in glob.glob(files)]
+        traces = [tr for trs in traces for tr in trs]
         self.scale = scale
+        self.selectby = selectby
         self.noise = self.dictify_noise(traces)
 
-    def dictify_noise(self, traces):
+    def evaluate_by(self, nslc_id):
+        return evaluate_by(nslc_id, self.selectby)
+
+    def dictify_noise(self, traces, by=None):
         noise = {}
         for tr in traces:
             if not tr.nslc_id in noise:
-                noise[tr.nslc_id] = tr.get_ydata()
+                #(n, s, l, c) = tr.nslc_id
+                key = self.evaluate_by(tr.nslc_id)
+                noise[key] = tr.get_ydata()
             else:
                 logger.warn('More than one noisy traces for %s' % ('.'.join(tr.nslc_id)))
         return noise
 
     def noisify(self, tr):
-        if tr.nslc_id not in self.noise.keys():
+        key = self.evaluate_by(tr.nslc_id)
+        if  key not in self.noise.keys():
             raise Exception('No Noise for tr %s' % ('.'.join(tr.nslc_id)))
-        n = self.extract_noise(tr) * self.scale
+        n = self.get_noise_trace(tr) * self.scale
         tr.ydata += n
         return tr
 
-    def extract_noise(self, tr):
+    def get_noise_trace(self, tr):
+        n_trace = tr.copy(data=False)
         n_want = len(tr.ydata)
-        i_start = num.random.choice(range(len(self.noise[tr.nslc_id])-n_want))
-        return self.noise[tr.nslc_id][i_start:i_start+n_want]
-
-
-
-class Noise:
-    def __init__(self, level):
-        self.level = level
-
-    def noisify(self, tr, inplace=True):
-        if inplace is False:
-            tr = tr.copy()
-        if tr.meta['noisified'] == True:
-            raise Exception('Trace was already noisified')
-        tr.meta['noisified'] = True
-        return self.add_noise(tr, self.level)
-
-    def add_noise(self, *args, **kwargs):
-        # to be implemented in subclass
-        pass
+        key = self.evaluate_by(tr.nslc_id)
+        i_start = num.random.choice(range(len(self.noise[key])-n_want))
+        ydata = self.noise[key][i_start:i_start+n_want]
+        n_trace.set_ydata(ydata)
+        return n_trace
+#class Noise:
+#    def __init__(self, level):
+#        self.level = level
+#
+#    def noisify(self, tr, inplace=True):
+#        if inplace is False:
+#            tr = tr.copy()
+#        if tr.meta['noisified'] == True:
+#            raise Exception('Trace was already noisified')
+#        tr.meta['noisified'] = True
+#        return self.add_noise(tr, self.level)
+#
+#    def add_noise(self, *args, **kwargs):
+#        # to be implemented in subclass
+#        pass
 
 
 class RandomNoise(Noise):
@@ -486,7 +517,8 @@ def _do_nothing(x):
     return x
 
 class Tracer:
-    def __init__(self, source, target, chopper, channel='v', engine=None, *args, **kwargs):
+    def __init__(self, source, target, chopper, channel='v', engine=None,
+                 noise=None, *args, **kwargs):
         ''':param channel: qseis channel'''
         self.runner = None
         self.source = source
@@ -506,6 +538,7 @@ class Tracer:
         self.fmin = kwargs.pop('fmin', -99999.)
         self.fmax = kwargs.pop('fmax', 99999.)
 
+        self.noise = noise
         self._apply_transfer = self.prepare_quantity(self.want)
         self.engine = engine
 
@@ -526,43 +559,7 @@ class Tracer:
             self.trace = trs[0]
 
     def setup_data(self, *args, **kwargs):
-        self.setup_from_engine()
-        if self.trace is not None:
-            #self.process()
-            return self.trace
-        else:
-            return False
-
-    def process(self, **pp_kwargs):
-
-        if isinstance(self.processed, trace.Trace):
-            # done already:
-            return self.processed
-
-        elif isinstance(self.processed, str):
-            # something went wrong before
-            return self.processed
-
-        else:
-            tr = self.trace.copy()
-            self.processed = self.chopper.chop(self.source, self.target, tr,
-                                              inplace=True)
-            if self.processed!="NoData":
-                self.processed = self.post_process(self.processed, **pp_kwargs)
-
-            return self.processed
-
-    def differentiate(self, tr):
-        t = tr.tmax - tr.tmin
-        sr = 0.5 / tr.deltat
-        return tr.transfer(transfer_function=diff_response,
-                           freqlimits=(1./t, 1.1/t, sr*1.1, sr*1.5),
-                           tfade=t*0.15)
-
-    def simulate(self, tr):
-        return tr.transfer(transfer_function=self.target.filter.response)
-
-    def setup_from_engine(self):
+        #self.setup_from_engine()
         try:
             response = self.engine.process(sources=[self.source], targets=[self.target])
         except OutOfBounds as e:
@@ -576,21 +573,65 @@ class Tracer:
             if self.source.brunes:
                 self.source.brunes.preset(source=self.source, target=self.target)
                 self.trace = self.trace.transfer(transfer_function=self.source.brunes)
-        self.trace = self._apply_transfer(self.trace)
+
+        #self.trace = self._apply_transfer(self.trace)
         if self.target.filter:
+            #import pdb
+            #pdb.set_trace()
+            #t1 = self.trace.copy()
+            #t1.set_station('raw')
+            #print self.target.filter.response
             self.trace = self.simulate(self.trace)
+            #trace.snuffle([t1, self.trace])
 
         self.chopper.chop(self.source, self.target, self.trace,
                                           inplace=True)
+        self.processed = self.trace
         #self.traces = rotate_rtz(self.traces)
-        self.config = self.engine.get_store_config(self.target.store_id)
-        return True
+        #self.config = self.engine.get_store_config(self.target.store_id)
+            #tr = self.trace.copy()
+            #self.processed = self.chopper.chop(self.source, self.target, tr,
+            #                                  inplace=True)
+        #if self.processed != "NoData":
+            #self.processed = self.post_process(self.processed, **pp_kwargs)
 
-    def post_process(self, tr, normalize=False, response=False, noise=False):
+        if self.noise:
+            self._noise_trace = self.noise.get_noise_trace(self.processed)
+            self.processed.add(self._noise_trace)
+
+        return self.processed
+        #return True
+        #if self.trace is not None:
+        #    #self.process()
+        #    return self.trace
+        #else:
+        #    return False
+
+    def process(self, **pp_kwargs):
+
+        #if isinstance(self.processed, trace.Trace):
+        #    return self.processed
+
+        #elif isinstance(self.processed, str):
+        #    # something went wrong before
+        #    return self.processed
+
+        #else:
+        return self.processed
+
+    def differentiate(self, tr):
+        t = tr.tmax - tr.tmin
+        sr = 0.5 / tr.deltat
+        return tr.transfer(transfer_function=diff_response,
+                           freqlimits=(1./t, 1.1/t, sr*1.1, sr*1.5),
+                           tfade=t*0.15)
+
+    def simulate(self, tr):
+        return tr.transfer(tfade=0.2, transfer_function=self.target.filter.response)
+
+    def post_process(self, tr, normalize=False, response=False): #, noise=False):
         if normalize:
             tr.set_ydata(tr.ydata/num.max(num.abs(tr.ydata)))
-        if noise:
-            tr = noise.noisify(tr)
         trace_length = tr.tmax-tr.tmin
         if self.want_trace_length is not None and trace_length!=self.want_trace_length:
             diff = trace_length - self.want_trace_length
@@ -649,11 +690,12 @@ class Tracer:
         #return self.signal_power(t1)/self.signal_power(t2)
 
     def noise_trace(self, offset):
-        tr = self.chopper.chop_pile(
-            self.data_pile, self.source, self.target, self.want_channel,
-            offset=offset)
-        tr.ydata /= self.normalization_factor
-        return tr
+        #tr = self.chopper.chop_pile(
+        #    self.data_pile, self.source, self.target, self.want_channel,
+        #    offset=offset)
+        #tr.ydata /= self.normalization_factor
+        #return tr
+        return self._noise_trace
 
 
 class QSeisTraces(Tracer):
