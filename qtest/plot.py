@@ -1,5 +1,32 @@
 import numpy as num
 import matplotlib as mpl
+plt = mpl.pyplot
+
+
+class VisualModel():
+
+    def __init__(self, values):
+        '''
+        :param values: matrix with three dimensions
+        '''
+        self.values = values
+
+    def plot_zslize(self, index, ax=None, show=False, saveas=None):
+        d = self.values[:,:,index]
+
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+
+        im = ax.pcolormesh(d)
+        fig.colorbar(im)
+
+        if saveas:
+            fig.savefig(saveas)
+
+        if show:
+            plt.show()
+
 
 class UniqueColor():
     def __init__(self, color_map=mpl.cm.coolwarm, tracers=None):
