@@ -1,7 +1,8 @@
 import numpy as num
 import unittest
 from pyrocko import cake
-from qtest import invert, vtk_graph
+import matplotlib.pyplot as plt
+from qtest import invert, vtk_graph, plot
 import scipy.optimize as optimize
 
 
@@ -77,19 +78,25 @@ class TomoTestCase(unittest.TestCase):
             ymax=1*km,
             zmin=12*km,
             zmax=15*km,
-            dx=0.4*km,
-            dy=0.4*km,
-            dz=0.4*km
+            dx=1.*km,
+            dy=1.*km,
+            dz=1.*km
         )
+
+        qvmin = 200.
+        qvmax = 400.
+
+        # setup the "measurements":
+        checkerboard = invert.CheckerboardModel.from_model(model)
+        checkerboard.setup(2, 1, 2, vmin=qvmin, vmax=qvmax)
+        print checkerboard.values
+        print checkerboard.values_range
 
         model.path_discretization_delta = 10.
 
         cake_model = cake.load_model('webnet_model1d.nd')
 
         phases = [cake.PhaseDef('p')]
-
-        # number of measurements (slopes/tstars)
-        n_measurements = 2
 
         # right side gives on slope (aka t-star)
         ray_r_1 = cake_model.arrivals(phases=phases,
@@ -125,21 +132,20 @@ class TomoTestCase(unittest.TestCase):
         cr = invert.Couple(ray_r_1, ray_r_2)
         cl = invert.Couple(ray_l_1, ray_l_2)
 
-        cr.slope = 0.1
-        cl.slope = 0.2
-
         couples = [cr, cl]
 
         # intermediate step required: ray path geometry
         G = []
         slopes = []
 
-        for c in couples:
-            ti_1 = model.cast_ray(c.ray1, return_quantity='times')
-            ti_2 = model.cast_ray(c.ray2, return_quantity='times')
+        q_model = 1./num.ravel(checkerboard.values)
 
-            G.append(num.ravel(ti_1 - ti_2))
-            slopes.append(c.slope)
+        for c in couples:
+            ti_1 = num.ravel(model.cast_ray(c.ray1, return_quantity='times'))
+            ti_2 = num.ravel(model.cast_ray(c.ray2, return_quantity='times'))
+
+            G.append(ti_1 - ti_2)
+            slopes.append(num.sum(q_model * (ti_1 - ti_2)))
 
         # Fuer jedes couple gibt es ein deltat*
         # delta_t* = sum(qi*ti)_1 - sum(qi*ti)_2 = slope
@@ -161,6 +167,34 @@ class TomoTestCase(unittest.TestCase):
         m_ref = invert.CheckerboardModel.from_model(model)
         result = optimize.basinhopping(search, m_ref.values)
         print result
+
+    def test_checkboard_and_plot(self):
+        model = invert.DiscretizedVoxelModel(
+            xmin=-1*km,
+            xmax=1*km,
+            ymin=-1*km,
+            ymax=1*km,
+            zmin=12*km,
+            zmax=15*km,
+            dx=0.2*km,
+            dy=0.2*km,
+            dz=0.2*km
+        )
+        vmin = 200.
+        vmax = 400.
+        checkerboard = invert.CheckerboardModel.from_model(model)
+        checkerboard.setup(2, 2, 2, vmin=vmin, vmax=vmax)
+        vminmod, vmaxmod = checkerboard.values_range
+        self.assertGreaterEqual(vminmod, vmin)
+        self.assertLessEqual(vmaxmod, vmax)
+
+        vmod = plot.VisualModel(values=checkerboard.values)
+        vmod.plot_zslize(0)
+        plt.show()
+
+        # actors = checkerboard.vtk_actors()
+        # vtk_graph.render_actors(actors)
+
 
 if __name__=='__main__':
     unittest.main()
