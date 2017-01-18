@@ -1,4 +1,5 @@
 from pyrocko.guts import Object, String, Float, Dict, Tuple, List
+from pyrocko import model, util
 
 
 class SyntheticTestConfig(Object):
@@ -29,4 +30,23 @@ class QConfig(Object):
     traversing_distance_min = Float.T(default=1000.)
 
     synthetic_config = SyntheticTestConfig.T(optional=True)
+
+    def __init__(self, *args, **kwargs):
+        Object.__init__(self, *args, **kwargs)
+
+    @property
+    def filtered_events(self):
+        e = model.load_events(self.events)
+        e = filter(lambda x: self.max_magnitude>x.magnitude>self.min_magnitude, e)
+        return e
+
+    @property
+    def filtered_stations(self):
+        stations = model.load_stations(self.stations)
+        f = []
+        wl = [tuple(w[:3]) for w in self.whitelist]
+        for s in stations:
+            if s.nsl() in wl:
+                f.append(s)
+        return f
 
