@@ -16,9 +16,10 @@ from pyrocko import cake
 from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
-from scipy.optimize import curve_fit, basinhopping
-from scipy import signal, interpolate
+from scipy.optimize import curve_fit
+from scipy import signal, interpolate, optimize
 from qtest.micro_engine import DataTracer, DDContainer
+from qtest.invert import ModelWithValues, DiscretizedModelNNInterpolation
 from autogain.autogain import PhasePie, PickPie
 from distance_point2line import Coupler, Animator
 from util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
@@ -620,35 +621,59 @@ def spectral_ratio(couple):
 
     return interc, slope, f_use, a_s, r, p, std
 
+def prepare_data_in_couple(couple):
+    tracer_master, tracer_slave = couple.master_slave
+    tr1 = tracer_master.setup_data(normalize=couple.normalize_waveforms)
+    tr2 = tracer_slave.setup_data(normalize=couple.normalize_waveforms)
+    if not tr1 or not tr2:
+        logger.debug('tr1 or tr2 are None')
+        couple.drop_data()
+        return False
+
+    return couple.master_slave
 
 class QInverter3D:
     ''' Uses only the significant bit of the ray segment.'''
     def __init__(self, couples, discretized_grid):
         if len(couples)==0:
             raise Exception('Empty list of test couples')
+        self.discretized_grid = discretized_grid
+        self.dws_grid = DiscretizedModelNNInterpolation.from_model(self.discretized_grid)
+
+        # Weighting factors dependent on the penetration of each voxel:
+        self.dws = []
 
         # Matrix G. This matrix is equivalent to the times a voxel is
         # penetrated by a ray, or the time a ray spends inside a certain voxel.
-        self.weights = []
+        self.penetration_duration = []
 
         # Matrix d, which is equivalent to the measured t* of that ray segment.
-        self.slopes = []
+        self.slopes = num.empty(len(couples))
 
-        logger.info('Evaluating model weights...')
-        for couple in couples:
-            w = discretized_grid.cast_ray(couple.ray_segment, return_quantity='times')
-            self.weights.append(w)
+        logger.info('Evaluating model penetration_duration...')
+        for icouple, couple in enumerate(couples):
+            trs = prepare_data_in_couple(couple)
+            if not trs:
+                continue
+            w = self.discretized_grid.cast_ray(couple.ray_segment, return_quantity='times')
+
+            #self.dws.append(num.ravel(self.dws_grid.cast_ray(couple.ray_segment)))
+            self.dws.append(num.ravel(w))
+
+            # Get the 'derivative weighted sum'. This is a formalism to describe the
+            # density of rays withing each voxel and will be used as weighting factors
+            # in the inversion.
+            w = self.discretized_grid.cast_ray(couple.ray_segment)
+            self.penetration_duration.append(w)
 
             interc, slope, fx, a_s, r, p, std = spectral_ratio(couple)
-            self.slopes.append(slope)
-        logger.info('Evaluating model weights finished')
+            self.slopes[icouple] = slope
+        logger.info('Evaluating model penetration_duration finished')
 
-    def invert(self):
+    def invert(self, qstart=350.):
         ''' run the inversion'''
 
-        def search(test_model):
-            ''':param test_model: flattened model instance'''
-
+        def searchold():
             n_G = len(self.weights)
             tstars = num.zeros(n_G)
             errors = num.zeros(n_G)
@@ -660,11 +685,73 @@ class QInverter3D:
             # L1 norm
             return num.sum(num.abs(errors))
 
-        nx, ny, nz = test_model._shape
-        initial_guess = num.ones(nx*ny*nz) * 500.
+        nx, ny, nz = self.discretized_grid._shape()
+        self.G = num.zeros((len(self.penetration_duration), (nx*ny*nz)))
+        for iw, w in enumerate(self.penetration_duration):
+            self.G[iw] = num.ravel(w)
 
-        self.result = basinhopping(search, initial_guess)
-        print self.result
+        def search(test_model, weights):
+            ''':param test_model: flattened model instance'''
+            #import pdb
+            #pdb.set_trace()
+            e = num.sum(num.abs((num.sum(self.G * test_model * weights, axis=1) - self.slopes)))
+            print 'error=', e
+            print 'test_model average', num.average(test_model)
+            print 'test_model min, max', num.min(test_model), num.max(test_model)
+            return e
+
+        initial_guess = num.ones((nx, ny, nz)) * 1./qstart/num.pi
+
+
+        args = ( num.sum(self.dws, axis=0)/num.sum(self.dws),
+                )
+
+        if False:
+            def print_fun(x, f, accepted):
+                print("at minima %.4f accepted %d" % (f, int(accepted)))
+            minimizer_kwargs = {"method":"BFGS",
+                                "args": args}
+            result = optimize.basinhopping(
+                search,
+                num.ravel(initial_guess),
+                callback=print_fun,
+                #T=1000000.,
+                #stepsize=0.1,
+                #interval=10,
+                disp=True,
+                minimizer_kwargs=minimizer_kwargs)
+
+        if False:
+            result = optimize.minimize(search,
+                              num.ravel(initial_guess),
+                              args=(penetration_duration, ))
+
+        if True:
+            result = optimize.root(
+                search, num.ravel(initial_guess), args=args, method='lm')
+
+        if False:
+            import time
+            for q in num.linspace(10,1000, 30):
+                print '------------'
+                print q*num.pi
+                initial_guess = num.ones((nx* ny* nz)) * 1./q
+                t1 = time.time()
+                print search(initial_guess, penetration_duration=penetration_duration)
+                t2 = time.time()
+                print searchOLD(initial_guess)
+                t3 = time.time()
+                print t2-t1, t3-t2
+
+
+        logger.info('Optimizer finished with state: %s' % result.success)
+        logger.info(result.message)
+
+        result_model = ModelWithValues.from_model(self.discretized_grid)
+        result_model.values = num.reshape(result.x, (nx, ny, nz))
+
+        return result, result_model
+
 
 class QInverter:
     def __init__(self, couples, cc_min=0.8, onthefly=False, snr_min=0.):
@@ -685,15 +772,11 @@ class QInverter:
             pb.update(i_c+1)
             fail_message = None
             if self.onthefly:
-                tracer_master, tracer_slave = couple.master_slave
-                tr1 = tracer_master.setup_data(normalize=couple.normalize_waveforms)
-                tr2 = tracer_slave.setup_data(normalize=couple.normalize_waveforms)
-                if not tr1 or not tr2:
-                    logger.debug('tr1 or tr2 are None')
-                    couple.drop_data()
+                trs = prepare_data_in_couple(couple)
+                if not trs:
                     continue
                 else:
-                    couple.process()
+                    tracer_master, tracer_slave = trs
 
             snr_tr1 = tracer_master.snr()
             snr_tr2 = tracer_slave.snr()
