@@ -27,13 +27,15 @@ from qtest.micro_engine import DataTracer, Tracer, Builder
 from qtest.micro_engine import Noise, Chopper
 from qtest.micro_engine import associate_responses, UniformTTPerturbation
 from qtest.distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
-from qtest.q import SyntheticCouple, QInverter
+from qtest.q import SyntheticCouple, QInverter, QInverter3D
 from qtest.plot import UniqueColor
 from qtest.util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
 from qtest.util import e2extendeds, e2s, s2t, konnoohmachi
 from qtest.config import QConfig
 from qtest.sources import DCSourceWid
 from qtest.vtk_graph import render_actors, vtk_ray
+from qtest.invert import DiscretizedVoxelModel, ModelWithValues
+
 from autogain.autogain import PhasePie, PickPie
 
 
@@ -228,7 +230,6 @@ def dbtest(config):
 
     #engine = LocalEngine(store_superdirs=['/data/stores', '/media/usb/stores'])
     engine = LocalEngine(store_superdirs=test_config.store_superdirs)
-    print engine
     #engine = LocalEngine(store_superdirs=['/media/usb/stores'])
     store = engine.get_store(store_id)
     gf_config = engine.get_store_config(store_id)
@@ -403,8 +404,16 @@ def dbtest(config):
                                          data=coupler.filtrate,
                                          max_mag_diff=config.magdiffmax)
     paired_sources = []
+    in_actors = []
+    actors = []
     for p in pairs_by_rays:
-        s1, s2, t, td, pd, totald, i1, segments = p
+        s1, s2, t, td, pd, totald, i1, ray_segments = p
+        #print ray_segments
+        if not (s1, s2, t) in in_actors:
+            actors.append(vtk_ray(num.array(ray_segments.nezt[:3])))
+        else:
+            in_actors.append((s1, s2, t))
+
         paired_sources.extend([s1, s2])
     used_mags = [s.magnitude for s in paired_sources]
     fig = plt.figure()
@@ -412,15 +421,9 @@ def dbtest(config):
     ax.hist(used_mags)
 
     testcouples = []
+    b = Builder()
     for r in pairs_by_rays:
         s1, s2, t, td, pd, totald, i1, ray_segment = r
-        #s1, s2, t, td, pd, totald, i1, segments = r
-        #if (s1, t) not in checked_rays.keys():
-        #    actors.append(vtk_ray(segments))
-        #    checked_rays[(s1, t)] = 1
-        #else:
-        #    checked_rays[(s1, t)] += 1
-
 
         fmax = min(vp/fresnel_lambda(totald, td, pd), config.fmax_lim)
         fmin1 = fmin_by_magnitude(s1.magnitude)
@@ -439,43 +442,60 @@ def dbtest(config):
                          perturbation=perturbation.perturb(0),
                          engine=engine, noise=noise)
         if fmax-fmin1<config.fminrange or fmax-fmin2<config.fminrange:
-            print fmax-fmin1, fmax-fmin2
+            print s1.magnitude, s2.magnitude
+            print 'skip because of fminrange', fmax-fmin1, fmax-fmin2
             continue
         else:
             pair = [tracer1, tracer2]
+            b.build(pair)
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=config.method, use_common=use_common,
                                          ray_segment=ray_segment)
             testcouple.normalize_waveforms = True
             testcouple.ray = r
             testcouple.filters = filters
-            testcouples.append(testcouple)
-
+            testcouple.process()
+            if testcouple.good:
+                testcouples.append(testcouple)
     #render_actors(actors)
 
     colors = UniqueColor(tracers=tracers)
-    inverter = QInverter(couples=testcouples, cc_min=config.cc_min, onthefly=True,
-                         snr_min=config.snr_min)
+    #inverter = QInverter(couples=testcouples, cc_min=config.cc_min, onthefly=True,
+    #                     snr_min=config.snr_min)
+    grid = DiscretizedVoxelModel.from_rays([c.ray_segment for c in testcouples], dx=200., dy=200., dz=200)
+    d = num.zeros(grid._shape())
+    for c in testcouples:
+        d += grid.cast_ray(c.ray_segment)
+    mwv = ModelWithValues.from_model(grid)
+    mwv.values = d
+
+    #actors.extend(grid.vtk_actors())
+    actors.extend(mwv.vtk_actors())
+    render_actors(actors)
+    print 'grid shape: ', grid._shape()
+    inverter = QInverter3D(couples=testcouples, discretized_grid=grid)
     inverter.invert()
-    good_results = filter(lambda x: x.invert_data is not None, testcouples)
-    for i, tc in enumerate(num.random.choice(good_results, 30)):
-        fn = util.ensuredirs('%s/example_%s.png' % (config.output,
-                                                       str(i).zfill(2)))
-        tc.plot(infos=infos, colors=colors, savefig=fn)
-    inverter.plot()
-    fn_results = '%s/results.txt' % (config.output)
-    util.ensuredirs(fn_results)
-    inverter.dump_results(fn_results)
 
-    fn_hist = '%s/hist_application.png' % (config.output)
-    util.ensuredirs(fn_hist)
-    fig = plt.gcf()
-    fig.savefig(fn_hist, dpi=600)
+    # Good old stuff: ----------------------------------------------------------
+    # good_results = filter(lambda x: x.invert_data is not None, testcouples)
+    # for i, tc in enumerate(num.random.choice(good_results, 30)):
+    #     fn = util.ensuredirs('%s/example_%s.png' % (config.output,
+    #                                                    str(i).zfill(2)))
+    #     tc.plot(infos=infos, colors=colors, savefig=fn)
+    # inverter.plot()
+    # fn_results = '%s/results.txt' % (config.output)
+    # util.ensuredirs(fn_results)
+    # inverter.dump_results(fn_results)
 
-    fn_analysis = "%s/q_fit_analysis" % (config.output)
-    util.ensuredirs(fn_analysis)
-    inverter.analyze(fnout_prefix=fn_analysis)
+    # fn_hist = '%s/hist_application.png' % (config.output)
+    # util.ensuredirs(fn_hist)
+    # fig = plt.gcf()
+    # fig.savefig(fn_hist, dpi=600)
 
+    # fn_analysis = "%s/q_fit_analysis" % (config.output)
+    # util.ensuredirs(fn_analysis)
+    # inverter.analyze(fnout_prefix=fn_analysis)
+    # --------------------------------------------------------------------------
 
     #testcouples = []
     #pairs = []
@@ -649,16 +669,15 @@ def run(config):
 
     testcouples = []
     actors = []
-    checked_rays = {}
+    in_actors = []
+    b = Builder()
     for r in pairs_by_rays:
-        s1, s2, t, td, pd, totald, i1, segments = r
-        if (s1, t) not in checked_rays.keys():
-            actors.append(vtk_ray(segments))
-            checked_rays[(s1, t)] = 1
+        s1, s2, t, td, pd, totald, i1, ray_segment = r
+
+        if not (s1, s2, t) in in_actors:
+            actors.append(vtk_ray(ray_segments))
         else:
-            checked_rays[(s1, t)] += 1
-
-
+            in_actors.append((s1, s2, t))
         fmax = min(vp/fresnel_lambda(totald, td, pd), config.fmax_lim)
         fmin1 = fmin_by_magnitude(s1.magnitude)
         #if config.want_phase.upper()=="S":
@@ -680,38 +699,55 @@ def run(config):
             continue
         else:
             pair = [tracer1, tracer2]
+            b.build(pair)
             testcouple = SyntheticCouple(master_slave=pair,
-                                         method=config.method, use_common=use_common)
+                                         method=config.method, use_common=use_common,
+                                         ray_segment=ray_segment)
             testcouple.normalize_waveforms = True
             testcouple.ray = r
             testcouple.filters = filters
-            testcouples.append(testcouple)
+            testcouple.process()
+            if testcouple.good:
+                testcouples.append(testcouple)
 
-    render_actors(actors)
+            #render_actors(actors)
+            #testcouple = SyntheticCouple(master_slave=pair,
+            #                             method=config.method, use_common=use_common)
+
+    #render_actors(actors)
 
     colors = UniqueColor(tracers=tracers)
-    inverter = QInverter(couples=testcouples, cc_min=config.cc_min, onthefly=True,
-                         snr_min=config.snr_min)
-    inverter.invert()
-    good_results = filter(lambda x: x.invert_data is not None, testcouples)
-    for i, tc in enumerate(num.random.choice(good_results, 30)):
-        fn = '%s/example_%s.png' % (config.output, str(i).zfill(2))
-        util.ensuredirs(fn)
-        tc.plot(infos=infos, colors=colors, savefig=fn)
-    inverter.plot()
+    #inverter = QInverter(couples=testcouples, cc_min=config.cc_min, onthefly=True,
+    #                     snr_min=config.snr_min)
+    #inverter.invert()
+    grid = DiscretizedVoxelModel.from_rays([c.ray_segment for c in testcouples], dx=200., dy=200., dz=200)
+    print 'grid shape: ', grid._shape()
+    actors.append(grid.vtk_actors())
+    render_actors(actors)
+    inverter = QInverter3D(couples=testcouples, discretized_grid=grid)
+    result, result_model = inverter.invert()
+    actors = result_model.vtk_actors()
+    import pdb
+    pdb.set_trace()
+    #good_results = filter(lambda x: x.invert_data is not None, testcouples)
+    #for i, tc in enumerate(num.random.choice(good_results, 30)):
+    #    fn = '%s/example_%s.png' % (config.output, str(i).zfill(2))
+    #    util.ensuredirs(fn)
+    #    tc.plot(infos=infos, colors=colors, savefig=fn)
+    #inverter.plot()
 
-    fn_results = '%s/results.txt' % config.output
-    util.ensuredirs(fn_results)
-    inverter.dump_results(fn_results)
+    #fn_results = '%s/results.txt' % config.output
+    #util.ensuredirs(fn_results)
+    #inverter.dump_results(fn_results)
 
-    fig = plt.gcf()
-    fn_hist = '%s/hist_application.png' % config.output
-    util.ensuredirs(fn_hist)
-    fig.savefig(fn_hist, dpi=400)
+    #fig = plt.gcf()
+    #fn_hist = '%s/hist_application.png' % config.output
+    #util.ensuredirs(fn_hist)
+    #fig.savefig(fn_hist, dpi=400)
 
-    fn_analysis = "%s/q_fit_analysis" % config.output
-    util.ensuredirs(fn_analysis)
-    inverter.analyze(fnout_prefix=fn_analysis)
+    #fn_analysis = "%s/q_fit_analysis" % config.output
+    #util.ensuredirs(fn_analysis)
+    #inverter.analyze(fnout_prefix=fn_analysis)
 
 
 if __name__=='__main__':
