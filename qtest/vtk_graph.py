@@ -1,6 +1,7 @@
 import vtk
 import numpy as num
 from vtk.util import numpy_support
+from qtest import invert
 
 
 def numpy_to_vtk(a):
@@ -28,6 +29,46 @@ def vtk_grid(pnts, xg, yg, zg, normalize=True):
                     vtk_point(num.array((xi, yi, zi)),
                                         scale=scale))
     return actors
+
+
+def grid_actors(pnts, xg, yg, zg, normalize=True):
+    '''
+    :param pnts: matrix of size (len(xg), len(yg), len(zg)) with scales
+    :param xg, yg, zg: coordinates vectors.
+
+    grid needs to be regularly spaced!'''
+    actors = []
+    if normalize:
+        pnts -= num.min(pnts)
+        pntsmax = num.max(pnts)
+    else:
+        pntsmax = 1.
+
+    pnts /= pntsmax
+    opacities = pnts/10.
+
+    dx = xg[1] - xg[0]
+    dy = yg[1] - yg[0]
+    dz = zg[1] - zg[0]
+
+    for ix, xi in enumerate(xg):
+        for iy, yi in enumerate(yg):
+            for iz, zi in enumerate(zg):
+                s = vtk.vtkCubeSource()
+                s.SetCenter(xi, yi, zi)
+                s.SetXLength(dx)
+                s.SetYLength(dy)
+                s.SetZLength(dz)
+
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(s.GetOutputPort())
+
+                actor = vtk.vtkActor()
+                actor.GetProperty().SetOpacity(opacities[ix, iy, iz])
+                actor.SetMapper(mapper)
+                actors.append(actor)
+    return actors
+
 
 
 def vtk_points(pnts, cube_size=10):
@@ -77,9 +118,13 @@ def vtk_point(pnts, scale=1):
     return actor
 
 
-def vtk_ray(pnts, opacity=1.):
+def vtk_ray(x, opacity=1.):
     '''pnts: numpy array of shape (3, X) for X is number of points.
     So, it's x,y,z columns'''
+    if isinstance(x, invert.Ray3D):
+        pnts = num.array(x.nezt[:3])
+    else:
+        pnts = x
     data = numpy_to_vtk(pnts)
     points = vtk.vtkPoints()
     points.SetData(data)
