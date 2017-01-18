@@ -432,8 +432,6 @@ class Builder:
     def build(self, tracers, engine=None, snuffle=False):
         ready = []
         need_work = []
-        logger.info('prepare or load tracers....')
-        pb = progressbar.ProgressBar(maxval=len(tracers)).start()
         for i_tr, tr in enumerate(tracers):
             if tr.setup_data(engine=engine):
                 ready.append(tr)
@@ -441,8 +439,6 @@ class Builder:
             #    ready.append(tr)
             #else:
             #    need_work.append(tr)
-            pb.update(i_tr)
-        pb.finish()
         logger.info('run %s tracers' % len(need_work))
         for tr, runner in parimap(self.work, need_work):
             tmpdir = runner.tempdir
@@ -576,13 +572,7 @@ class Tracer:
 
         #self.trace = self._apply_transfer(self.trace)
         if self.target.filter:
-            #import pdb
-            #pdb.set_trace()
-            #t1 = self.trace.copy()
-            #t1.set_station('raw')
-            #print self.target.filter.response
             self.trace = self.simulate(self.trace)
-            #trace.snuffle([t1, self.trace])
 
         self.chopper.chop(self.source, self.target, self.trace,
                                           inplace=True)
@@ -696,19 +686,6 @@ class Tracer:
         #tr.ydata /= self.normalization_factor
         #return tr
         return self._noise_trace
-
-
-class QSeisTraces(Tracer):
-    def __init__(self, *args, **kwargs):
-        Tracer.__init__(self, *args, **kwargs)
-
-        if self.target.store_id is not None and not self.kwargs.pop('no_config', False):
-            self.config.receiver_distances = [source.distance_to(target)/1000.]
-            self.config.receiver_azimuths = [source.azibazi_to(target)[0]]
-            self.config.source_depth = source.depth/1000.
-            self.config.id+= "_%s" % (self.source.id)
-            self.config.regularize()
-
 
 
 class AhfullgreenTracer(Tracer):
