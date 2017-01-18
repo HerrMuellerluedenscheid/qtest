@@ -1,21 +1,21 @@
 import numpy as num
-from scipy.optimize import basinhopping
+import math
 
 from lassie import grid
-from pyrocko.cake import evenize_path, Ray, d2m
+from pyrocko.cake import Ray, d2m
 from functools import reduce
 
 
-def kernel(Matrix_TD_i, Matrix_TD_j, model_vector, slopes):
-    '''
-    Matrix_TD_i/j = Traversing distance matrix.
-    This is the Distance each ray spent within one voxel.
-
-    model_vector = 1/Q*1/v = q*s
-
-    slopes = slopes from spectral ratios
-    '''
-    return (Matrix_TD_i - Matrix_TD_j) * model_vector - slopes
+def evenize_path(x,y,z,t, delta):
+    distance = num.zeros(x.size)
+    distance[1:] = num.cumsum(num.sqrt((x[1:]-x[:-1])**2 + (y[1:]-y[:-1])**2 + (z[1:]-z[:-1])**2))
+    n = int(math.floor(distance[-1]/delta))
+    distance_even = num.arange(n)*delta + 0.5*delta
+    x = num.interp(distance_even, distance, x)
+    y = num.interp(distance_even, distance, y)
+    z = num.interp(distance_even, distance, z)
+    t = num.interp(distance_even, distance, t)
+    return x,y,z,t
 
 
 class Couple():
@@ -55,14 +55,15 @@ class Ray3D(Ray):
         z = z[0] + self.zshift
         return n, e, z, t[0]
 
-    def evenized_path(self, delta):
-        return evenize_path(*nezt, delta=delta)
-
     @classmethod
     def from_RayPath(cls, ray):
         o = cls(0., 0., 0., ray.path, ray.p, ray.x, ray.t, ray.endgaps, ray.draft_pxt)
         return o
 
+    def evenized_path(self, delta):
+        ''' Return n, e, z and t of ray subsampled with *delta* in meters.
+        Distances between points are regular spaced.'''
+        return evenize_path(*self.nezt, delta=delta)
 
 class Ray3DDiscretized(Ray3D):
 
@@ -71,6 +72,7 @@ class Ray3DDiscretized(Ray3D):
         self.e = e
         self.z = z
         self.t = t
+        assert self.t.shape == self.n.shape
 
     @property
     def nezt(self):
@@ -107,11 +109,53 @@ class RayCastModel(grid.Carthesian3DGrid):
         implementation'''
         pass
 
+    @classmethod
+    def from_rays(cls, rays, dx, dy, dz):
+        '''setup a model from list of *rays* to ensure that the model covers
+        all ray segments.'''
+
+        mins = num.empty((len(rays), 3))
+        maxs = num.empty((len(rays), 3))
+        for ir, r in enumerate(rays):
+            mins[ir] = (num.min(r.n), num.min(r.e), num.min(r.z))
+            maxs[ir] = (num.max(r.n), num.max(r.e), num.max(r.z))
+
+        mins = num.min(mins, axis=0)
+        maxs = num.max(maxs, axis=0)
+
+        o = cls(
+            xmin=mins[0], xmax=maxs[0],
+            ymin=mins[1], ymax=maxs[1],
+            zmin=mins[2], zmax=maxs[2],
+            dx=dx, dy=dy, dz=dz)
+
+        return o
+
+    @classmethod
+    def from_model(cls, m):
+        return cls(
+            xmin=m.xmin,
+            xmax=m.xmax,
+            ymin=m.ymin,
+            ymax=m.ymax,
+            zmin=m.zmin,
+            zmax=m.zmax,
+            dx=m.dx,
+            dy=m.dy,
+            dz=m.dz,
+        )
+
+    def vtk_actors(self):
+        values = num.ones(self._shape())*0.1
+        from qtest.vtk_graph import grid_actors
+        return grid_actors(values, *self._get_coords())
+
 
 class DiscretizedModelNNInterpolation(RayCastModel):
-    ''' Cartesian discretized model including some tomography functionalities'''
+    ''' Cartesian discretized model including some tomography functionalities
+    '''
     def __init__(self, *args, **kwargs):
-        grid.RayCastModel.__init__(self, *args, **kwargs)
+        RayCastModel.__init__(self, *args, **kwargs)
         self.max_dist_possible = num.sqrt(self.dx**2 + self.dy**2 + self.dz**2)
 
     def cast_ray(self, ray):
@@ -119,6 +163,9 @@ class DiscretizedModelNNInterpolation(RayCastModel):
         through and the distance the ray traversed within that value.
 
         This will be used to construct the Matrix_TD as input for the kernel.
+
+        It seems that the others call this the derivative weighted sum (DWS)
+        (http://www.diss.fu-berlin.de/diss/servlets/MCRFileNodeServlet/FUDISS_derivate_000000001580
         '''
 
         # Ray coordinates
@@ -132,9 +179,9 @@ class DiscretizedModelNNInterpolation(RayCastModel):
         # combine indices above
         iwant_ray = reduce(num.intersect1d, (i_n, i_e, i_d))
 
-        n = n[iwant_ray]
-        e = e[iwant_ray]
-        d = d[iwant_ray]
+        n = n[iwant_ray[:-1]]
+        e = e[iwant_ray[:-1]]
+        d = d[iwant_ray[:-1]]
 
         # indices of the corner closest to origin of the 8 nearest neighbours
         i_n = (n-self.xmin) / self.dx
@@ -166,7 +213,7 @@ class DiscretizedModelNNInterpolation(RayCastModel):
         # normalize with maximum possible distance
         w /= self.max_dist_possible
         w = 1. - w
-        weights = num.zeros(self._shape)
+        weights = num.zeros(self._shape())
         for i, (ix, iy, iz) in enumerate(zip(i_n, i_e, i_d)):
             weights[ix, iy, iz] += w[i]
 
@@ -196,11 +243,11 @@ class DiscretizedVoxelModel(RayCastModel):
         # combine indices above
         iwant_ray = reduce(num.intersect1d, (i_n, i_e, i_d))
 
-        n = n[iwant_ray]
-        e = e[iwant_ray]
-        d = d[iwant_ray]
-        dt = t[1:] - t[:-1]
-        t = dt[iwant_ray]
+        n = n[iwant_ray[:-1]]
+        e = e[iwant_ray[:-1]]
+        d = d[iwant_ray[:-1]]
+        t = t[iwant_ray]
+        t = t[1:] - t[:-1]
 
         if return_quantity == 'distances':
             t[:] = self.path_discretization_delta
@@ -215,31 +262,46 @@ class DiscretizedVoxelModel(RayCastModel):
         i_d = i_d.astype(dtype=num.int, copy=False)
 
         weights = num.zeros(self._shape())
-        for i in range(len(iwant_ray)):
+
+        for i in iwant_ray[:-1]:
             weights[i_n[i], i_e[i], i_d[i]] += t[i]
 
         return weights
 
 
-class CheckerboardModel(DiscretizedVoxelModel):
+class ModelWithValues(DiscretizedVoxelModel):
     def __init__(self, *args, **kwargs):
 
         DiscretizedVoxelModel.__init__(self, *args, **kwargs)
         self.values = num.zeros(self._shape())
 
+    def vtk_actors(self):
+        from qtest.vtk_graph import grid_actors
+        return grid_actors(self.values, *self._get_coords())
+
+
+class CheckerboardModel(ModelWithValues):
+
+    def __init__(self, *args, **kwargs):
+        ModelWithValues.__init__(self, *args, **kwargs)
+
     def setup(self, nx, ny, nz, vmin=1., vmax=10.):
         ''' number of check board patches in 3 dimensions'''
         i = 0
         mnx, mny, mnz = self._shape()
-        xvals = num.linspace(0, nx*2*num.pi, mnx)
-        yvals = num.linspace(0, ny*2*num.pi, mny)
-        zvals = num.linspace(0, nz*2*num.pi, mnz)
+
+        xvals = vmin + ((num.sin(num.linspace(0, nx*2*num.pi, mnx))+1.)/2.) * (vmax-vmin)
+        yvals = vmin + ((num.sin(num.linspace(0, ny*2*num.pi, mny))+1.)/2.) * (vmax-vmin)
+        zvals = vmin + ((num.sin(num.linspace(0, nz*2*num.pi, mnz))+1.)/2.) * (vmax-vmin)
 
         for ix in range(mnx):
             for iy in range(mny):
                 for iz in range(mnz):
-                    self.values[ix, iy, iz] = vmin + \
-                        (xvals[ix] + yvals[iy] + zvals[iz])* (vmax - vmin)
+                    self.values[ix, iy, iz] = (xvals[ix] + yvals[iy] + zvals[iz])/3
+
+    @property
+    def values_range(self):
+        return num.min(self.values), num.max(self.values)
 
     @classmethod
     def from_model(cls, m):
@@ -257,11 +319,6 @@ class CheckerboardModel(DiscretizedVoxelModel):
         i.setup(3, 3, 3)
         return i
 
-def process():
-    model = DiscretizedModel()
-
-    start = model.get_starting_model(initial_guess=100)
-    basinhopping(kernel, x0=starting_model)
 
 if __name__ == '__main__':
 
