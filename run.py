@@ -11,7 +11,7 @@ import progressbar
 import logging
 from pyrocko.gf import meta, Target, LocalEngine
 from pyrocko import orthodrome
-from pyrocko.gui_util import PhaseMarker
+from pyrocko.gui_util import PhaseMarker, Marker
 from pyrocko import util
 from pyrocko import cake, model
 from pyrocko import pile
@@ -21,16 +21,16 @@ from pyrocko.trace import nextpow2
 from pyrocko import trace
 from collections import defaultdict
 from scipy.stats import linregress
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, nnls
 from scipy import signal, interpolate
 from qtest.micro_engine import DataTracer, Tracer, Builder
 from qtest.micro_engine import Noise, Chopper
 from qtest.micro_engine import associate_responses, UniformTTPerturbation
 from qtest.distance_point2line import Coupler, Animator, Filtrate, fresnel_lambda
-from qtest.q import SyntheticCouple, QInverter, QInverter3D
-from qtest.plot import UniqueColor
+from qtest.q import SyntheticCouple, QInverter, QInverter3D, spectral_ratio
+from qtest.plot import UniqueColor, VisualModel
 from qtest.util import Magnitude2Window, Magnitude2fmin, fmin_by_magnitude
-from qtest.util import e2extendeds, e2s, s2t, konnoohmachi
+from qtest.util import e2extendeds, e2s, s2t, konnoohmachi, reset_events
 from qtest.config import QConfig
 from qtest.sources import DCSourceWid
 from qtest.vtk_graph import render_actors, vtk_ray
@@ -184,7 +184,6 @@ def dbtest(config):
     fn_coupler = 'dummy_coupling.p'
     quantity = 'velocity'
     dump_coupler = False
-    #fn_coupler = 'dummy_coupling.yaml'
     #fn_coupler = 'pickled_couples.p'
     #fn_coupler = None
     test_scenario = True
@@ -451,7 +450,7 @@ def dbtest(config):
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=config.method, use_common=use_common,
                                          ray_segment=ray_segment)
-            testcouple.normalize_waveforms = True
+            testcouple.snr_min = config.snr_min
             testcouple.ray = r
             testcouple.filters = filters
             testcouple.process()
@@ -559,13 +558,14 @@ def dbtest(config):
     #plt.show()
 
 
-def reset_events(markers, events):
+def reset_events_old(markers, events):
     for e in events:
         marks = filter(lambda x: x.get_event_time()==e.time, markers)
         for phase in set([m.get_phasename() for m in marks]):
             work = filter(lambda x: x.get_phasename() == phase, marks)
             map(lambda x: x.set_event(e), work)
             # set NKCN to NKC where NKC is not picked
+
             nkc_picks = filter(lambda x: x.one_nslc()[1]=='NKC', work)
             nkcn_picks = filter(lambda x: x.one_nslc()[1]=='NKCN', work)
             if len(nkc_picks) == 0:
@@ -595,10 +595,10 @@ def run(config):
     fmin_by_magnitude = Magnitude2fmin.setup(lim=config.fmin_lim)
 
     mod = cake.load_model(config.earthmodel)
-    markers = PhaseMarker.load_markers(config.markers)
+    markers = Marker.load_markers(config.markers)
     events = list(model.Event.load_catalog(config.events))
     fn_mseed = glob.glob(config.traces)
-    data_pile = pile.make_pile(fn_mseed, fileformat='gse2')
+    data_pile = pile.make_pile(fn_mseed, fileformat=config.file_format or 'mseed')
     print "nevents ", len(events)
     print "nmarkers ", len(markers)
     print 'initially %s events' , len(events)
@@ -607,29 +607,45 @@ def run(config):
     events = filter(lambda x: x.magnitude >= config.min_magnitude, events)
     events = filter(lambda x: x.magnitude<= config.max_magnitude, events)
     print '%s events'% len(events)
+    markers = filter(lambda x: isinstance(x, PhaseMarker), markers)
+
     reset_events(markers, events)
+    events_by_time = {}
+    for e in events:
+        events_by_time[e.time] = e
 
     stations = model.load_stations(config.stations)
     if config.whitelist:
-        stations = filter(
-            lambda x: util.match_nslcs(
-                '%s.%s.%s.*' % x.nsl(), config.whitelist),  stations)
+        want_stations = []
+        for s in stations:
+            for l in config.whitelist:
+                if util.match_nslc(l, s.nsl()):
+                    want_stations.append(s)
 
+        stations = want_stations
+
+    if len(stations) == 0:
+        raise Exception('no stations')
     pie = PickPie(markers=markers, mod=mod, event2source=e2s, station2target=s2t)
 
-    window_by_magnitude = {'P': Magnitude2Window.setup(0.08, 3.),
-                           'S': Magnitude2Window.setup(0.12, 3.1)}[config.want_phase]
-    phase_position = {'S': 0.2, 'P': 0.4}
+    if not config.window_length:
+        window_by_magnitude = {'P': Magnitude2Window.setup(0.1, 2.4),
+                               'S': Magnitude2Window.setup(0.15, 3.1)}[config.want_phase]
+        window_length = None
+    else:
+        window_by_magnitude = None
+        window_length = config.window_length
+
+    phase_position = {'S': 0.7, 'P': 0.6}
 
     # in order to rotate into lqt system
-    rotate_channels = {'in_channels': ('SHZ', 'SHN', 'SHE'),
-                       'out_channels': ('L', 'Q', 'T')}
+    #rotate_channels = {'in_channels': ('SHZ', 'SHN', 'SHE'),
+    #                   'out_channels': ('L', 'Q', 'T')}
 
-    channels = {'P': 'SHZ', 'S': 'SHN' }
-    channel = channels[config.want_phase.upper()]
-    pie.process_markers(phase_selection=config.want_phase, stations=stations, channel=channel)
+    pie.process_markers(phase_selection=config.want_phase, stations=stations, channel=config.channel)
     p_chopper = Chopper(
         startphasestr=config.want_phase, by_magnitude=window_by_magnitude,
+        fixed_length=window_length,
         phase_position=phase_position[config.want_phase.upper()], phaser=pie)
     tracers = []
 
@@ -641,7 +657,7 @@ def run(config):
     if data_pile.tmax==None or data_pile.tmin == None:
         raise Exception('failed reading mseed')
     # webnet Z targets:
-    targets = [s2t(s, channel) for s in stations]
+    targets = [s2t(s, config.channel) for s in stations]
     if load_coupler:
         filtrate = Filtrate.load_pickle(filename=fn_coupler)
         sources = filtrate.sources
@@ -650,19 +666,20 @@ def run(config):
     else:
         coupler = Coupler()
         coupler.magdiffmax = config.magdiffmax
-        coupler.whitelist = config.whitelist
+        #coupler.whitelist = config.whitelist
         sources = [e2s(e) for e in events]
         if dump_coupler:
             dump_to = fn_coupler
         else:
             dump_to = None
-
         coupler.process(
-            sources, targets, mod, [config.want_phase, config.want_phase.lower()],
-            check_relevance_by=data_pile,
+            sources, targets, mod, [cake.PhaseDef(config.want_phase),
+                                    cake.PhaseDef(config.want_phase.lower())],
+            #check_relevance_by=data_pile,
             ignore_segments=False, dump_to=dump_to)
 
-    pairs_by_rays = coupler.filter_pairs(2., config.traversing_distance_min,
+    candidates = coupler.filter_pairs(config.traversing_ratio,
+                                      config.traversing_distance_min,
                                          data=coupler.filtrate,
                                          ignore=ignore,
                                          max_mag_diff=config.magdiffmax)
@@ -671,11 +688,13 @@ def run(config):
     actors = []
     in_actors = []
     b = Builder()
-    for r in pairs_by_rays:
+    rays = []
+    accepted_events = {}
+    for r in candidates:
         s1, s2, t, td, pd, totald, i1, ray_segment = r
 
         if not (s1, s2, t) in in_actors:
-            actors.append(vtk_ray(ray_segments))
+            actors.append(vtk_ray(ray_segment))
         else:
             in_actors.append((s1, s2, t))
         fmax = min(vp/fresnel_lambda(totald, td, pd), config.fmax_lim)
@@ -685,13 +704,13 @@ def run(config):
         #    # http://www.geologie.ens.fr/~madariag/Programs/Mada76.pdf
         #    fmin1 /= 1.5
         tracer1 = DataTracer(data_pile=data_pile, source=s1, target=t,
-                             chopper=p_chopper, want_channel=channel, fmin=fmin1,
+                             chopper=p_chopper, want_channel=config.channel, fmin=fmin1,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
 
         fmin2 = fmin_by_magnitude(s2.magnitude)
         tracer2 = DataTracer(data_pile=data_pile, source=s2, target=t,
-                             chopper=p_chopper, want_channel=channel, fmin=fmin2,
+                             chopper=p_chopper, want_channel=config.channel, fmin=fmin2,
                              fmax=fmax, incidence_angle=i1)
                              #rotate_channels=rotate_channels)
         if fmax-fmin1<config.fminrange or fmax-fmin2<config.fminrange:
@@ -703,37 +722,126 @@ def run(config):
             testcouple = SyntheticCouple(master_slave=pair,
                                          method=config.method, use_common=use_common,
                                          ray_segment=ray_segment)
-            testcouple.normalize_waveforms = True
-            testcouple.ray = r
+            testcouple.normalize_waveforms = False
+            testcouple.ray = ray_segment
             testcouple.filters = filters
+            testcouple.snr_min = config.snr_min
             testcouple.process()
             if testcouple.good:
                 testcouples.append(testcouple)
+                for src in [s1, s2]:
+                    accepted_events[src.time] = events_by_time[src.time]
 
             #render_actors(actors)
             #testcouple = SyntheticCouple(master_slave=pair,
             #                             method=config.method, use_common=use_common)
 
-    #render_actors(actors)
+    model.dump_events(accepted_events.values(), filename='accepted_events.pf')
 
-    colors = UniqueColor(tracers=tracers)
+    #render_actors(actors)
+    #colors = UniqueColor(tracers=tracers)
     #inverter = QInverter(couples=testcouples, cc_min=config.cc_min, onthefly=True,
     #                     snr_min=config.snr_min)
     #inverter.invert()
-    grid = DiscretizedVoxelModel.from_rays([c.ray_segment for c in testcouples], dx=200., dy=200., dz=200)
-    print 'grid shape: ', grid._shape()
-    actors.append(grid.vtk_actors())
-    render_actors(actors)
-    inverter = QInverter3D(couples=testcouples, discretized_grid=grid)
-    result, result_model = inverter.invert()
-    actors = result_model.vtk_actors()
-    import pdb
-    pdb.set_trace()
-    #good_results = filter(lambda x: x.invert_data is not None, testcouples)
-    #for i, tc in enumerate(num.random.choice(good_results, 30)):
-    #    fn = '%s/example_%s.png' % (config.output, str(i).zfill(2))
-    #    util.ensuredirs(fn)
-    #    tc.plot(infos=infos, colors=colors, savefig=fn)
+
+    ray_segments = []
+    for candidate in testcouples:
+        # maybe it's ray, not ray_segment
+        ray_segments.append(candidate.ray)
+
+    # check limits!
+    grid = DiscretizedVoxelModel.from_rays(ray_segments, dx=300., dy=4000., dz=400)
+
+    #dtstar_theo = num.empty(len(testcouples))
+    #ts = num.empty((len(testcouples), num.product(grid._shape())))
+
+    ts = []
+    dtstar_theo = []
+
+    slope_pos = 0
+    slope_neg = 0
+    low_snr = 0
+    q_average = []
+    for i_c, ray_segment in enumerate(ray_segments):
+
+        #ts[i_c] = num.ravel(grid.cast_ray(ray_segment, return_quantity='times'))
+
+        interc, slope, fx, a_s, r, p, std = spectral_ratio(testcouples[i_c])
+        if slope is None or num.isnan(slope):
+            low_snr += 1
+            continue
+        else:
+            ts.append(num.ravel(grid.cast_ray(ray_segment, return_quantity='times')))
+            #slope *= -1
+            #print 'negate slope'
+            dtstar_theo.append(slope)
+            q_average.append(slope/num.sum(ts[-1]))
+
+        if slope>=0:
+            slope_pos += 1
+        else:
+            slope_neg += 1
+
+    print 'negative slopes: ', slope_neg, 'positive_slopes: ', slope_pos, 'low snr: ', low_snr
+
+    fig = plt.figure()
+    ax= fig.add_subplot(111)
+    ax.hist(q_average, bins=41)
+    mean_q = num.mean(q_average)
+    ax.axvline(num.mean(mean_q))
+    ax.text(mean_q, 1, str(mean_q))
+    fig.savefig('q_average.png')
+
+    ts = num.array(ts)
+    dtstar_theo = num.array(dtstar_theo)
+
+    if False:
+        tspinv = num.linalg.pinv(ts, rcond=1e-4)
+        mtheo = num.dot(tspinv, dtstar_theo)
+
+    else:
+        mtheo, norm = nnls(ts, dtstar_theo)
+
+
+    ts_full_ray_segment = num.sum(ts, axis=1)
+
+    # masking result:
+    outlierthresh = 1e-9
+    imask = num.where(num.abs(mtheo)<outlierthresh)
+    mask = num.zeros(mtheo.shape)
+    mask[imask] = 1
+    #mtheo = num.ma.masked_array(mtheo, mask)
+    fig = plt.figure()
+    ax = fig.add_subplot(211)
+    #ax.hist(num.ravel(mtheo), bins=21)
+    q_average = 1./(ts_full_ray_segment*dtstar_theo)
+    n_before = len(q_average)
+    q_average = q_average[num.where(num.abs(q_average)<2000)]
+    n_after = len(q_average)
+    ax.hist(q_average, bins=41)
+    #ax.set_xlim(-2000, 2000)
+    print n_before, n_after, 'XX'
+    ax.set_title(num.median(1./(ts_full_ray_segment*dtstar_theo)))
+    ax = fig.add_subplot(212)
+    #import pdb
+    #pdb.set_trace()
+    ax.set_title(num.median((ts_full_ray_segment*dtstar_theo)))
+    ax.hist(ts_full_ray_segment*dtstar_theo, bins=41)
+    plt.savefig('q-distribution.png')
+    ginverse_solution = ModelWithValues.from_model(grid)
+    ginverse_solution.values = 1./num.reshape(mtheo, ginverse_solution._shape())
+    print ginverse_solution.values
+
+    visual_model = VisualModel(values=ginverse_solution.values)
+    for yslize in range(1):
+        visual_model.plot_slize(direction='EW', index=yslize, show=True, saveas='%s_res.png' % yslize)
+
+    #render_actors(ginverse_solution.vtk_actors())
+
+    for i, tc in enumerate(num.random.choice(testcouples, 30)):
+        fn = '%s/newexample_%s.png' % (config.output, str(i).zfill(2))
+        util.ensuredirs(fn)
+        tc.plot(infos=infos, savefig=fn)
     #inverter.plot()
 
     #fn_results = '%s/results.txt' % config.output

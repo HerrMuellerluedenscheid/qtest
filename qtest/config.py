@@ -28,10 +28,12 @@ class QConfig(Object):
     max_magnitude =  Float.T(default=4.)
     whitelist = List.T(String.T(), optional=True)
     traversing_distance_min = Float.T(default=1000.)
+    traversing_ratio = Float.T(default=2.)
     file_format = String.T(optional=True)
     synthetic_config = SyntheticTestConfig.T(optional=True)
     window_length = Float.T(optional=True)
     channel = String.T()
+    fn_couples = String.T(optional=True)
 
     def __init__(self, *args, **kwargs):
         Object.__init__(self, *args, **kwargs)

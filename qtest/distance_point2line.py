@@ -59,7 +59,6 @@ class Filtrate(Object):
     earthmodel = meta.Earthmodel1D.T()
     phases = List.T(String.T())
     magdiffmax = Float.T(optional=True)
-    distance3d_min = Float.T(optional=True)
     #couples = List.T(List.T(DCSource.T(),
     #                         DCSource.T(),
     #                         Target.T(),
@@ -90,20 +89,15 @@ class Coupler():
         self.hookup = None
         self.filtrate = filtrate
         self.magdiffmax = 100.
-        self.whitelist = None
-        self.distance3d_min = None
-        print 'phases in process obsolete'
+        self.minimum_magnitude = -10
 
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True,
                 dump_to=False, check_relevance_by=False):
 
-        if self.whitelist:
-            targets = filter(lambda x: x.codes in self.whitelist, targets)
-
         self.filtrate = Filtrate(
             sources=sources, targets=targets, phases=phases,
             earthmodel=earthmodel, magdiffmax=self.magdiffmax)
-        phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
+
         i = 0
         self.hookup = Hookup.from_locations(targets)
         failed = 0
@@ -118,10 +112,16 @@ class Coupler():
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
-                arrival = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth)
-                incidence_angle = arrival[0].incidence_angle()
+                arrivals = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth) 
+
+                if len(arrivals) == 0:
+                    print 'no arrival', t, ev.depth, phases
+                    continue
+                # first arrivals
+                arrival = arrivals[0]
+                incidence_angle = arrival.incidence_angle()
                 try:
-                    n, e, d, travel_times = project2enz(arrival[0], ev.azibazi_to(t)[0])
+                    n, e, d, travel_times = project2enz(arrival, ev.azibazi_to(t)[0])
                 except IndexError as err:
                     print '!!!Error> ', err
                     continue
@@ -150,7 +150,7 @@ class Coupler():
 
                     if aout:
                         td, pd, total_td, sgmts = aout
-                        ray = Ray3DDiscretized(*sgmts, t=travel_times[:len(sgmts)])
+                        ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
                         #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
                         passed += 1
                         self.filtrate.couples.append( [
@@ -163,7 +163,8 @@ class Coupler():
             pb.update(i)
             i += 1
         pb.finish()
-        render_actors(actors)
+        # VTK
+        # render_actors(actors)
         print 'failed: %s, passed:%s ' % (failed, passed)
         if passed == 0:
             raise Exception('Coupling failed')
@@ -185,13 +186,22 @@ class Coupler():
                 source.time, source.time+20,
                 trace_selector=lambda x: (x.station==target.codes[1]))
 
-    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data, ignore=[], max_mag_diff=100):
+    def filter_pairs(self, threshold_pass_factor, min_travel_distance, data,
+                     ignore=[], max_mag_diff=100, max_magnitude=10.,
+                     min_magnitude=-10.):
+
         filtered = []
         has_segments = True
         #if isinstance(data, Filtrate):
         #has_segments = False
         for r in data:
             e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
+
+            if e1.magnitude > max_magnitude or e2.magnitude> max_magnitude:
+                continue
+
+            if e1.magnitude < min_magnitude or e2.magnitude< min_magnitude:
+                continue
 
             if abs(e1.magnitude-e2.magnitude)>max_mag_diff:
                 continue

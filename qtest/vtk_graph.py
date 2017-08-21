@@ -38,6 +38,7 @@ def grid_actors(pnts, xg, yg, zg, normalize=True):
 
     grid needs to be regularly spaced!'''
     actors = []
+    pnts = num.copy(pnts)
     if normalize:
         pnts -= num.min(pnts)
         pntsmax = num.max(pnts)
@@ -46,6 +47,7 @@ def grid_actors(pnts, xg, yg, zg, normalize=True):
 
     pnts /= pntsmax
     opacities = pnts/10.
+    opacities[num.ma.getmaskarray(opacities)] = 0
 
     dx = xg[1] - xg[0]
     dy = yg[1] - yg[0]

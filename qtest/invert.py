@@ -6,16 +6,17 @@ from pyrocko.cake import Ray, d2m
 from functools import reduce
 
 
-def evenize_path(x,y,z,t, delta):
+def evenize_path(x, y, z, t, delta):
     distance = num.zeros(x.size)
-    distance[1:] = num.cumsum(num.sqrt((x[1:]-x[:-1])**2 + (y[1:]-y[:-1])**2 + (z[1:]-z[:-1])**2))
+    distance[1:] = num.cumsum(num.sqrt(
+        (x[1:]-x[:-1])**2 + (y[1:]-y[:-1])**2 + (z[1:]-z[:-1])**2))
     n = int(math.floor(distance[-1]/delta))
     distance_even = num.arange(n)*delta + 0.5*delta
     x = num.interp(distance_even, distance, x)
     y = num.interp(distance_even, distance, y)
     z = num.interp(distance_even, distance, z)
     t = num.interp(distance_even, distance, t)
-    return x,y,z,t
+    return x, y, z, t
 
 
 class Couple():
@@ -65,6 +66,7 @@ class Ray3D(Ray):
         Distances between points are regular spaced.'''
         return evenize_path(*self.nezt, delta=delta)
 
+
 class Ray3DDiscretized(Ray3D):
 
     def __init__(self, n, e, z, t):
@@ -101,7 +103,7 @@ class RayCastModel(grid.Carthesian3DGrid):
     ''' Cartesian discretized model including some tomography functionalities'''
     def __init__(self, *args, **kwargs):
         grid.Carthesian3DGrid.__init__(self, *args, **kwargs)
-        self.path_discretization_delta = 10
+        self.path_discretization_delta = 2.
         #self.weights = num.zeros(self._shape())
 
     def cast_ray(self, ray):
@@ -113,7 +115,6 @@ class RayCastModel(grid.Carthesian3DGrid):
     def from_rays(cls, rays, dx, dy, dz):
         '''setup a model from list of *rays* to ensure that the model covers
         all ray segments.'''
-
         mins = num.empty((len(rays), 3))
         maxs = num.empty((len(rays), 3))
         for ir, r in enumerate(rays):
@@ -128,7 +129,7 @@ class RayCastModel(grid.Carthesian3DGrid):
             ymin=mins[1], ymax=maxs[1],
             zmin=mins[2], zmax=maxs[2],
             dx=dx, dy=dy, dz=dz)
-
+        print o._shape()
         return o
 
     @classmethod
@@ -273,7 +274,8 @@ class ModelWithValues(DiscretizedVoxelModel):
     def __init__(self, *args, **kwargs):
 
         DiscretizedVoxelModel.__init__(self, *args, **kwargs)
-        self.values = num.zeros(self._shape())
+        self.values = num.empty(self._shape())
+        #self.values = num.zeros(self._shape())
 
     def vtk_actors(self):
         from qtest.vtk_graph import grid_actors

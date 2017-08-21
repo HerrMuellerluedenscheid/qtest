@@ -14,9 +14,9 @@ from pyrocko.gf import RectangularSource, OutOfBounds
 from pyrocko.parimap import parimap
 from autogain.autogain import PhasePie
 
+logger= logging.getLogger()
 
-
-methods_avail = ['fft', 'psd', 'filter']                                                                                                           
+methods_avail = ['fft', 'psd', 'filter']
 try:
     import pymutt
     methods_avail.append('pymutt')
@@ -47,7 +47,7 @@ pjoin = os.path.join
 logger = logging.getLogger('root')
 diff_response = trace.DifferentiationResponse()
 tr_meta_init = {'noisified': False}
-_taper = trace.CosFader(xfrac=0.3)
+_taper = trace.CosFader(xfrac=0.1)
 
 
 def spectralize(tr, method='mtspec', **kwargs):
@@ -102,6 +102,7 @@ def spectralize(tr, method='mtspec', **kwargs):
         a = num.sqrt(a)
 
     elif method=='sine_psd':
+        print('Warning: sine psd of mtspec is inappropriate for short samples!')
         tr = tr.copy()
         ydata = tr.get_ydata()
         tr.set_ydata(ydata/num.max(num.abs(ydata)))
@@ -117,20 +118,41 @@ def spectralize(tr, method='mtspec', **kwargs):
         #_tr.extend(_tr.tmin-pad_length, _tr.tmax+pad_length)
         #trace.snuffle([_tr, tr])
         ydata = tr.get_ydata()
-        ydata = num.asarray(ydata, dtype=num.float)
-        tr.set_ydata(ydata/num.max(num.abs(ydata)))
-        a, f = mtspec(data=tr.ydata,
+        #ydata = num.asarray(ydata, dtype=num.float)
+        #tr.snuffle()
+        #tr.set_ydata(ydata/num.max(num.abs(ydata)))
+        ydata -= num.mean(ydata)
+        tr.ydata = ydata
+        #tr.snuffle()
+
+        nsplit = int(len(ydata)/2)
+        ydata1 = ydata[0:nsplit]
+        ydata2 = ydata[nsplit:2*nsplit]
+
+        a1, f = mtspec(data=ydata1,
                       delta=tr.deltat,
-                      number_of_tapers=7,
+                      number_of_tapers=5,
                       #number_of_tapers=12,
                       #number_of_tapers=2,
-                      time_bandwidth=4.,
+                      time_bandwidth=3.5,
                       #time_bandwidth=7.5,
                       #time_bandwidth=10.,
-                      nfft=trace.nextpow2(len(tr.get_ydata())),
-                      quadratic=True,
+                      #nfft=trace.nextpow2(len(tr.get_ydata())),
+                      #quadratic=True,
                       statistics=False)
-        a = num.sqrt(a)
+        a2, f = mtspec(data=ydata2,
+                      delta=tr.deltat,
+                      number_of_tapers=5,
+                      #number_of_tapers=12,
+                      #number_of_tapers=2,
+                      time_bandwidth=3.5,
+                      #time_bandwidth=7.5,
+                      #time_bandwidth=10.,
+                      #nfft=trace.nextpow2(len(tr.get_ydata())),
+                      #quadratic=True,
+                      statistics=False)
+        a1 = num.sqrt(a1)
+        a2 = num.sqrt(a2)
 
     elif method == 'filter':
         filters = kwargs.get('filters', None)
@@ -149,14 +171,12 @@ def spectralize(tr, method='mtspec', **kwargs):
 
         for filt in filters:
             tr_work = tr.copy(data=True)
-            #tr_work.taper(_taperer, inplace=True, chop=False)
             tr_work.set_codes(network=str(filt))
             fcenter, fwidth = filt
             apply_filter(tr_work, 2, fcenter-fwidth/2., fcenter+fwidth/2.)
             #tr_work.highpass(4, fcenter-fwidth/2.)
             #tr_work.lowpass(4, fcenter+fwidth/2.)
 
-            # post taper to avoid misinterpretation of dc offset
             #tr_work.taper(_taperer, inplace=True, chop=False)
             f.append(fcenter)
             a.append(num.max(num.abs(tr_work.get_ydata())))
@@ -170,7 +190,7 @@ def spectralize(tr, method='mtspec', **kwargs):
         raise Exception("unknown method")
 
     #a = konnoohmachi(a, f, 20)
-    return f, a
+    return f, a1, a2
 
 
 
@@ -405,7 +425,6 @@ def WEBNETMl2M0(Ml):
 #
 #    @property
 #    def b(self):
-#        print self.magnitude, self.a
 #        return 2.33*self.vs / self.a
 #
 #    @property
@@ -529,13 +548,12 @@ class Tracer:
         self.kwargs = kwargs
         self.channel = channel
         self.want_trace_length = None
-        self.perturbation = kwargs.pop('perturbation', 0.)
+        #self.perturbation = kwargs.pop('perturbation', 0.)
         self.want = kwargs.pop('want', 'displacement')
         self.fmin = kwargs.pop('fmin', -99999.)
         self.fmax = kwargs.pop('fmax', 99999.)
 
         self.noise = noise
-        self._apply_transfer = self.prepare_quantity(self.want)
         self.engine = engine
 
     def prepare_quantity(self, want):
@@ -640,10 +658,10 @@ class Tracer:
         trace.snuffle(self.traces)
 
     def onset(self):
-        return self.chopper.onset(self.source, self.target) + self.perturbation
+        return self.chopper.onset(self.source, self.target)# + self.perturbation
 
     def arrival(self):
-        return self.chopper.arrival(self.source, self.target) + self.perturbation
+        return self.chopper.arrival(self.source, self.target)# + self.perturbation
 
     def get_geometry(self):
         return self.source.distance_to(self.target), self.source.depth
@@ -765,9 +783,9 @@ class DataTracer(Tracer):
             else:
                 tr.meta = tr_meta_init
 
-        if normalize and tr:
-            self.normalization_factor = num.max(num.abs(tr.ydata))
-            tr.ydata /= self.normalization_factor
+        #if normalize and tr:
+        #    self.normalization_factor = num.max(num.abs(tr.ydata))
+        #    tr.ydata /= self.normalization_factor
 
         self.trace = tr
         self.processed = self.trace
@@ -848,10 +866,6 @@ class Chopper():
         else:
             select = lambda x: util.match_nslc('*.{station}.*.*{channel}'.format(
                     station=target.codes[1], channel=want_channel), x.nslc_id)
-        #else:
-        #    select = lambda x: x.nslc_id[:3] == target.codes[:3]
-        #else:
-        #    select = lambda x: x.nslc_id[:3] == target.codes[:3]
 
         try:
             add = (tend-tstart) * 0.1
@@ -860,14 +874,14 @@ class Chopper():
             tend += add/2.
 
             tr = data_pile.chop(tmin=tstart, tmax=tend, trace_selector=select)[0][0]
-            tr.highpass(4, 2./(tr.tmax-tr.tmin))
-
+            #tr.highpass(4, 2./(tr.tmax-tr.tmin))
+            tr.ydata = num.asarray(tr.ydata, num.float)
             tstart += add/2.
             tend -= add/2.
 
 
-            tr.chop(tmin=tstart, tmax=tend)
-            tr.taper(_taper)
+            #tr.chop(tmin=tstart, tmax=tend)
+            #tr.taper(_taper)
         except IndexError as e:
             logger.debug('%s: no data in pile for selection %s %s %s' %
                          (e, target, tstart-1, tstart))

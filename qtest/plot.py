@@ -5,21 +5,53 @@ plt = mpl.pyplot
 
 class VisualModel():
 
-    def __init__(self, values):
+    def __init__(self, values, x=None, y=None, z=None):
         '''
         :param values: matrix with three dimensions
         '''
+        if any([x is not None or y is not None or z is not None]):
+            assert(values.shape == (len(x), len(y), len(z)))
+        else:
+            nx, ny, nz = values.shape
+            x = num.arange(nx)
+            y = num.arange(ny)
+            z = num.arange(nz)
+
+        self.x = x
+        self.y = y
+        self.z = z
+
         self.values = values
 
-    def plot_zslize(self, index, ax=None, show=False, saveas=None):
-        d = self.values[:,:,index]
+    def plot_slize(self, direction, index, ax=None, show=False, saveas=None, vminmax=None):
+        if vminmax is None:
+            absmax = num.max(num.abs(self.values))
+            vmin, vmax = -absmax, absmax
+        else:
+            vmin, vmax = vminmax
+
+        if direction == 'NS':
+            d = self.values[:, :, index]
+            x, y = num.meshgrid(self.y, self.z)
+
+        elif direction == 'EW':
+            d = self.values[:, index, :]
+            x, y = num.meshgrid(self.z, self.x)
+
+        elif direction == 'Z':
+            d = self.values[index, :, :]
+            x, y = num.meshgrid(self.x, self.y)
 
         if ax is None:
             fig = plt.figure()
             ax = fig.add_subplot(111)
+        else:
+            fig = ax.get_figure()
 
-        im = ax.pcolormesh(d)
-        fig.colorbar(im)
+        im = ax.pcolormesh(x, y, d, vmin=vmin, vmax=vmax, cmap='RdBu')
+
+        cb = fig.colorbar(im)
+        cb.set_label('1/Q')
 
         if saveas:
             fig.savefig(saveas)

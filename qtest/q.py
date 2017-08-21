@@ -240,12 +240,13 @@ class Spectra(DDContainer):
                 ax.text(0.01, 0.90+i_fail, 'no data', transform=ax.transAxes, verticalalignment='top')
                 i_fail -= 0.1
                 continue
-            fx, fy = num.vsplit(fxfy, 2)
+            fx, fy, f_noise = num.vsplit(fxfy, 3)
             if colors != 'rb':
                 color = colors[tracer]
             else:
                 color = colors[count]
             ax.plot(fx.T[1:], fy.T[1:], label=tracer.label(), color=color, alpha=alpha)
+            ax.plot(fx.T[1:], f_noise.T[1:], label=tracer.label(), color=color, alpha=alpha)
             #ax.plot(fx.T, fy.T, '+', label=tracer.label(), color=color, alpha=alpha)
             ax.axvspan(tracer.fmin, tracer.fmax, facecolor='0.5', alpha=0.1)
             count += 1
@@ -295,12 +296,10 @@ class Spectra(DDContainer):
         indx = num.where(num.logical_and(both_f>=fmin, both_f<=fmax))
         f_use = both_f[indx]
         a_s = num.empty((2, len(f_use)))
-        i = 0
-        for tr, fxfy in self.spectra:
-            fx, fy = fxfy
-            f = interpolate.interp1d(fx, fy)
-            a_s[i][:] = f(f_use)
-            i += 1
+        #for tr, fxfy in self.spectra:
+        #    fx, fy = fxfy
+        #    f = interpolate.interp1d(fx, fy)
+        #    a_s[i][:] = f(f_use)
 
         return f_use, a_s
 
@@ -314,10 +313,9 @@ class SyntheticCouple():
         self.fit_function = None
         self.colors = None
         self.good = True
+        self.snr_min = 0
         self.use_common = use_common
         self.ray_segment = ray_segment
-        self.repeat = 0
-        self.noise_level = 0
         self.invert_data = None
         self._cc = None
         self.filters = {}
@@ -350,7 +348,6 @@ class SyntheticCouple():
 
     def process(self, **pp_kwargs):
         ready = []
-        want_length = -1
         for i, tracer in enumerate(self.master_slave):
             tr = tracer.process(**pp_kwargs)
             if tr is False or isinstance(tr, str):
@@ -358,47 +355,32 @@ class SyntheticCouple():
                 self.good = tr
                 continue
 
-            if want_length<(tr.tmax-tr.tmin):
-                want_length = tr.tmax-tr.tmin
-
             ready.append((tr, tracer))
 
         for tr, tracer in ready:
-            if self.normalize_waveforms:
-                ynew = tr.get_ydata()
-                self.normalization_factor = num.max(num.abs(ynew))
-                ynew /= self.normalization_factor
-                tr.set_ydata(ynew)
-
-            length = tr.tmax - tr.tmin
-            diff = want_length - length
-            tr.extend(tmin=tr.tmin-diff, tmax=tr.tmax, fillmethod='repeat')
+            #if self.normalize_waveforms:
+            #    ynew = tr.get_ydata()
+            #    self.normalization_factor = num.max(num.abs(ynew))
+            #    ynew /= self.normalization_factor
+            #    tr.set_ydata(ynew)
 
             #f, a = self.get_spectrum(tr, tracer, length)
-            f, a = tracer.processed_spectrum(self.method, filters=self.filters)
+            f, a_noise, a_signal = tracer.processed_spectrum(self.method, filters=self.filters)
 
             #f_n, a_n = tracer.noise_spectrum(self.method, filters=self.filters)
             #power_noise = util.power(f_n, a_n)
-
-            fxfy = num.vstack((f,a))
+            print f.shape, a_noise.shape, a_signal.shape
+            fxfy = num.vstack((f, a_noise, a_signal))
             self.spectra.spectra.append((tracer, fxfy))
 
-    #def get_spectrum(self, tr, tracer, wantlength, spectralize_kwargs=None):
-    #    if not spectralize_kwargs:
-    #        spectralize_kwargs = {}
-    #    spectralize_kwargs.update({'tinc': tracer.tinc,
-    #                               'chopper': tracer.chopper,
-    #                               'filters': self.filters})
-    #    return spectralize(tr, self.method, **spectralize_kwargs)
-
-    def plot(self, colors, **kwargs):
-        colors = 'rb'
+    def plot(self, colors=None, **kwargs):
         fn = kwargs.pop('savefig', False)
         #fig = plt.figure(figsize=(4, 6.5))
         #ax = fig.add_subplot(3, 1, 3)
         fig = plt.figure(figsize=(7.5, 3.5))
         ax = fig.add_subplot(1, 2, 2)
-        colors = 'rb'
+        if not colors:
+            colors = 'rb'
         #self.spectra.plot_all(ax, colors=colors, legend=False)
         self.spectra.plot_all(ax, legend=False)
         if self.invert_data:
@@ -556,49 +538,6 @@ def noisy_spectral_ratios(pairs):
     return indxs, ratios
 
 
-#def spectral_ratio(couple):
-#    '''Ratio of two overlapping spectra.
-#
-#    i is the mean intercept.
-#    s is the slope ratio of each individual linregression.'''
-#    assert len(couple.spectra.spectra)==2, '%s spectra found: %s' % (len(couple.spectra.spectra), couple.spectra.spectra)
-#    fx = []
-#    fy = []
-#    s = None
-#    if couple.use_common:
-#        cfmin = max([couple.spectra.spectra[1][0].fmin, couple.spectra.spectra[0][0].fmin])
-#        cfmax = min([couple.spectra.spectra[1][0].fmax, couple.spectra.spectra[0][0].fmax])
-#    else:
-#        cfmin = None
-#        cfmax = None
-#    dis = None
-#    for tr, fxfy in couple.spectra.spectra:
-#        if dis is None:
-#            dis = tr.source.distance_to(tr.target)
-#        else:
-#            assert tr.source.distance_to(tr.target) < dis
-#
-#        fs, a = fxfy
-#        if cfmin and cfmax:
-#            fmin = cfmin
-#            fmax = cfmax
-#        else:
-#            fmin = max(tr.fmin, fs.min())
-#            fmax = min(tr.fmax, fs.max())
-#        ind = limited_frequencies_ind(fmin, fmax, fs)
-#        slope, interc, r, p, std = linregress(fs[ind], num.log(a[ind]))
-#        if not s:
-#            i = interc
-#            s = slope
-#            #s = num.exp(slope)
-#        else:
-#            i += interc
-#            s -= slope
-#            #s -= num.exp(slope)
-#        fx.append(fs)
-#    print 'TODO: rethink this method'
-#    return i/2., -s, num.sort(num.hstack(fx)), r, p, std
-
 def spectral_ratio(couple):
     '''Ratio of two overlapping spectra.
 
@@ -608,14 +547,27 @@ def spectral_ratio(couple):
     s is the slope ratio of each individual linregression.'''
     assert len(couple.spectra.spectra)==2, '%s spectra found: %s' % (len(couple.spectra.spectra), couple.spectra.spectra)
 
-    if couple.use_common:
-        cfmin, cfmax = couple.frequency_range_work()
-    else:
-        raise Exception("deprecated")
-        cfmin = None
-        cfmax = None
+    cfmin, cfmax = couple.frequency_range_work()
 
-    f_use, a_s = couple.spectra.get_interpolated_spectra(cfmin, cfmax)
+
+    a_s = []
+    f_s = []
+    a_noise = []
+    for i, (tr, fxfy) in enumerate(couple.spectra.spectra):
+        f, a_n, a = fxfy
+        indx = num.where(num.logical_and(f>=cfmin, f<=cfmax))
+        a_noise.append(a_n[indx])
+        a_s.append(a[indx])
+        f_s.append(f[indx])
+
+    if any(a_s[0]/a_noise[0] < couple.snr_min) or\
+            any(a_s[1]/a_noise[1] < couple.snr_min) or\
+            not all(f_s[0] == f_s[1]):
+        return None, None, f_s[0], a_s, None, None, None
+
+    f_use = f_s[0]
+
+    #f_use, a_s = couple.spectra.get_interpolated_spectra(cfmin, cfmax)
 
     slope, interc, r, p, std = linregress(f_use, num.log(a_s[1]/a_s[0]))
 

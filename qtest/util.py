@@ -46,55 +46,57 @@ def fmin_by_magnitude(magnitude, stress=10., vr=3500):
     #return r
 
 
-def fit_log(onset1, onset2, mtspec_args, taper_args=None, fminmax=(-999, 999),
-            estimator="linregress"):
-    tp1, tr1 = onset1
-    tp2, tr2 = onset2
-    if taper_args:
-        tr1.taper(**taper_args)
-        tr2.taper(**taper_args)
-    mtspec_args.update({'data': tr1.ydata, 'nfft': trace.nextpow2(len(tr1.ydata))})
-    a1, f1 = mtspec(**mtspec_args)
-
-    mtspec_args.update({'data': tr2.ydata, 'nfft': trace.nextpow2(len(tr2.ydata))})
-    a2, f2 = mtspec(**mtspec_args)
-
-    # psd => ampspecs
-    ratio = num.sqrt(a1/a2)
-    assert all(f1==f2)
-    ratio = num.log(ratio)
-    indx = num.where(num.logical_and(f1>fminmax[0], f1<fminmax[1]))
-    f1 = f1[indx]
-    ratio = ratio[indx]
-    if estimator == "linregress":
-        return stats.linregress(f1, ratio)
-    elif estimator == "ransac":
-        import ransac
-        n = 10.   # minimum number of data values required to fit the model
-        k = 100.    # maximum number of iterations allowed in the algorithm
-        t = 10.   # threshold value for determining when a data point fits a model
-        d = 10.      # the number of close data values required to assert that a
-                  # model fits well to data
-        all_data = num.vstack((f1, ratio))
-        n_inputs = 1
-        n_outputs = 1
-        input_columns = range(n_inputs) # the first columns of the array
-        output_columns = [n_inputs+i for i in range(n_outputs)] # the
-
-        model = ransac.LinearLeastSquaresModel(input_columns, output_columns,
-                                               debug=False)
-        return ransac.ransac(all_data.T, model, n, k, t, d), None, None, None, None
-
-    elif estimator == "theil-sen":
-        estimator = TheilSenRegressor(random_state=42)
-        estimator.fit(f1[:, num.newaxis], ratio)
-        xline = num.array([0., 200.])
-        ypred = estimator.predict(xline.reshape(2,1))
-        interc = ypred[0]
-        slope = (ypred[1]-ypred[0])/(xline[1]-xline[0])
-        return slope, interc, None, None, None
-    else:
-        raise Exception("unknown method")
+#def fit_log(onset1, onset2, mtspec_args, taper_args=None, fminmax=(-999, 999),
+#            estimator="linregress"):
+#    tp1, tr1 = onset1
+#    tp2, tr2 = onset2
+#    if taper_args:
+#        tr1.taper(**taper_args)
+#        tr2.taper(**taper_args)
+#    mtspec_args.update({'data': tr1.ydata, 'nfft': trace.nextpow2(len(tr1.ydata))})
+#    a1, f1 = mtspec(**mtspec_args)
+#
+#    mtspec_args.update({'data': tr2.ydata, 'nfft': trace.nextpow2(len(tr2.ydata))})
+#    a2, f2 = mtspec(**mtspec_args)
+#
+#    # psd => ampspecs
+#    #ratio = num.sqrt(a1/a2)
+#    #ratio = num.sqrt(a1)/num.sqrt(a2)
+#    ratio = a1/a2
+#    assert all(f1==f2)
+#    ratio = num.log(ratio)
+#    indx = num.where(num.logical_and(f1>fminmax[0], f1<fminmax[1]))
+#    f1 = f1[indx]
+#    ratio = ratio[indx]
+#    if estimator == "linregress":
+#        return stats.linregress(f1, ratio)
+#    elif estimator == "ransac":
+#        import ransac
+#        n = 10.   # minimum number of data values required to fit the model
+#        k = 100.    # maximum number of iterations allowed in the algorithm
+#        t = 10.   # threshold value for determining when a data point fits a model
+#        d = 10.      # the number of close data values required to assert that a
+#                  # model fits well to data
+#        all_data = num.vstack((f1, ratio))
+#        n_inputs = 1
+#        n_outputs = 1
+#        input_columns = range(n_inputs) # the first columns of the array
+#        output_columns = [n_inputs+i for i in range(n_outputs)] # the
+#
+#        model = ransac.LinearLeastSquaresModel(input_columns, output_columns,
+#                                               debug=False)
+#        return ransac.ransac(all_data.T, model, n, k, t, d), None, None, None, None
+#
+#    elif estimator == "theil-sen":
+#        estimator = TheilSenRegressor(random_state=42)
+#        estimator.fit(f1[:, num.newaxis], ratio)
+#        xline = num.array([0., 200.])
+#        ypred = estimator.predict(xline.reshape(2,1))
+#        interc = ypred[0]
+#        slope = (ypred[1]-ypred[0])/(xline[1]-xline[0])
+#        return slope, interc, None, None, None
+#    else:
+#        raise Exception("unknown method")
 
 
 
@@ -244,6 +246,13 @@ def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_t
         velocity=velocity, stf=stf)
 
 
+def reset_events(markers, events):
+    for e in events:
+        marks = filter(lambda x: x.get_event_time()==e.time, markers)
+        for phase in set([m.get_phasename() for m in marks]):
+            work = filter(lambda x: x.get_phasename() == phase, marks)
+            map(lambda x: x.set_event(e), work)
+
 
 def s2t(s, channel='Z', store_id=None): 
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation, 
@@ -254,7 +263,6 @@ def s2t(s, channel='Z', store_id=None):
 def get_stf(magnitude=0, stress=0.1, vr=2750., type=None):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
     duration = M02tr(Mo, stress, vr)
-    print 'CHECK THE DURATION: %s' % duration
     if type==None:
         stf = None
     elif type=='boxcar':
