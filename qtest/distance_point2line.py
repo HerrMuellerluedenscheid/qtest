@@ -108,7 +108,7 @@ class Coupler():
         actors = []
         for i_e, ev in enumerate(sources):
             #pb.update(i_e)
-            actors.append(vtk_point(self.hookup(ev)))
+            #actors.append(vtk_point(self.hookup(ev)))
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
                     continue
@@ -141,24 +141,23 @@ class Coupler():
                 #actors.append(vtk_ray(points_of_segments, opacity=0.3))
                 for i_cmp_e, cmp_e in enumerate(sources):
                     ned_cmp = self.hookup(cmp_e)
-                    if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
-                        failed += 1
-                        continue
+                    #if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
+                    #    failed += 1
+                    #    continue
 
-                    aout = get_passing_distance(
-                            points_of_segments, num.array(ned_cmp))
-
+                    aout = get_passing_distance(points_of_segments, num.array(ned_cmp))
                     if aout:
                         td, pd, total_td, sgmts = aout
-                        ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
+                        #ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
                         #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
                         passed += 1
-                        self.filtrate.couples.append( [
+                        self.filtrate.couples.append((
                             ev, cmp_e, t,
                             float(td), float(pd), float(total_td),
-                            incidence_angle, ray])
-                    else:
-                        continue
+                            incidence_angle))
+                            #, ray))
+
+                    continue
 
             pb.update(i)
             i += 1
@@ -177,7 +176,6 @@ class Coupler():
         z, x, t = arrival.zxt_path_subdivided()
         return num.sum(num.sqrt(num.diff(num.array(x)*cake.d2m)**2+num.diff(num.array(z))**2))
 
-
     def is_relevant(self, source, target, p):
         if p==False or p ==None:
             return True
@@ -195,7 +193,8 @@ class Coupler():
         #if isinstance(data, Filtrate):
         #has_segments = False
         for r in data:
-            e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
+            e1, e2, t, traveled_d, passing_d, totald, incidence_angle = r
+            #e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
 
             if e1.magnitude > max_magnitude or e2.magnitude> max_magnitude:
                 continue
@@ -354,6 +353,7 @@ def project2enz(arrival, azimuth_deg):
 def stats_by_station(results):
     hit_counter = {}
     for r in results:
+        print(r)
         s1, s2, t, td, pd, totald, incidence_angle = r
         if not t in hit_counter:
             hit_counter[t] = 1
@@ -521,9 +521,11 @@ def load_and_show(fn):
     ax = scatter(X, Y, Z, ax=ax)
 
 if __name__=='__main__':
+    from util import s2t, e2s
+    from pyrocko.gf import SourceWithMagnitude
+
     year = 2008
     webnet_stations = model.load_stations('/data/meta/stations.pf')
-
 
     if True:
         print 'loading'
@@ -533,54 +535,19 @@ if __name__=='__main__':
         plt.show()
         sys.exit(1)
 
-
-    #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    #webnet_stations = model.load_stations('/data/meta/stations.pf')
-    ##hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
-    #stations = make_station_grid(webnet_stations, num_n=1, num_e=1, edge_stretch=0.15)
-    #colormap = UniqueColor(tracers=stations)
-    #phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
-    #earthmodel = cake.load_model('../earthmodel_malek_alexandrakis.nd')
-
-    ## sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
-    #fig, ax = Animator.get_3d_ax()
-
-    #results = process(events, stations, earthmodel, phases)
-
-    #filtered = filter_pairs(results, 5, 200., ax=ax)
-    #hitcount = stats_by_station(filtered)
-    #X, Y, Z = xyz_from_hitcount(hitcount)
-    #num.savetxt('hitcount.txt', num.column_stack((X, Y, Z)))
-    #make_animation(filtered, colormap)
-
-    # here goes the later calculated full extension of the seismogenic zone
-    #events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-
-    #events = list(model.Event.load_catalog('/data/meta/webnet_reloc/hypo_dd_event.pf'))
-    events = list(model.Event.load_catalog('/data/meta/webnet_reloc/reloc_new/%s_reloc.pf' %year))
-    #compare_events = list(model.Event.load_catalog('/data/meta/events2008.pf'))
-    #hitcount_map_from_file(filename='hitcount.txt', stations=webnet_stations)
-    #print 'exiting.....'
-    #stations = make_station_grid(webnet_stations, num_n=5, num_e=4, edge_stretch=0.2)
-    stations = make_station_grid(webnet_stations, num_n=20, num_e=20, edge_stretch=1.0)
-    plot_stations(stations)
-    #colormap = UniqueColor(tracers=stations)
-    #phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
-    earthmodel = cake.load_model('models/earthmodel_malek_alexandrakis.nd')
-
-    # sollte besser in 2d gemacht werden. Dauert ja sonst viel laenger...
-    center = array_center(events)
+    eventfn = '/home/marius/josef_dd/events_from_sebastian_check_M1.pf'
+    events = list(model.Event.load_catalog(eventfn))
+    compare_events = list(model.Event.load_catalog(eventfn))
+    phases = [cake.PhaseDef('p'), cake.PhaseDef('P')]
+    earthmodel = cake.load_model('/data/models/earthmodel_malek_alexandrakis.nd')
     nevents = 80
-    #nevents = 15
     coupler = Coupler()
-    from q import s2t, e2s
-    from pyrocko.gf import SourceWithMagnitude
+    stations = make_station_grid(webnet_stations, num_n=5, num_e=5, edge_stretch=1.0)
     targets = [s2t(s) for s in stations]
     sources = [SourceWithMagnitude(lat=e.lat, lon=e.lon, depth=e.depth) for e in events]
     coupler.process(num.random.choice(sources, nevents), targets, earthmodel,
-                    phases=None, ignore_segments=True)
-    filtered = coupler.filter_pairs(4., 1000., data=coupler.filtrate)
+                    phases=phases, ignore_segments=True)
+    filtered = coupler.filter_pairs(3., 1000., data=coupler.filtrate)
     hitcount = stats_by_station(filtered)
     #hitcount_map(hitcount, webnet_stations, events)
     # save:
