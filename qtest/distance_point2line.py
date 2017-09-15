@@ -11,13 +11,14 @@ from pyrocko.guts import List, Object, String, Float
 import progressbar
 import logging
 import sys
+import os
 from qtest.invert import Ray3D, Ray3DDiscretized
 from vtk_graph import vtk_ray, render_actors, vtk_point
 
 logger = logging.getLogger()
 
 cmap = plt.cm.bone_r
-
+pjoin = os.path.join
 
 class UniqueColor():
     def __init__(self, color_map=mpl.cm.jet, tracers=None):
@@ -83,6 +84,19 @@ class Filtrate(Object):
         return pickle.load(open(filename, 'rb'))
 
 
+def hash(source, targets, earthmodel, phases):
+    hstr = ''
+    for s in sources:
+        hstr += str(s)
+    for t in targets:
+        hstr += str(t)
+    hstr += str(earthmodel)
+    for phase in phases:
+        hstr += str(phase)
+
+    return hashlib.sha1(hstr).hexdigest()
+
+
 class Coupler():
     def __init__(self, filtrate=None):
         self.results = []
@@ -92,7 +106,7 @@ class Coupler():
         self.minimum_magnitude = -10
 
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True,
-                dump_to=False, check_relevance_by=False):
+                cache_dir=None, check_relevance_by=False):
 
         self.filtrate = Filtrate(
             sources=sources, targets=targets, phases=phases,
@@ -168,9 +182,9 @@ class Coupler():
         if passed == 0:
             raise Exception('Coupling failed')
 
-        if dump_to:
-            self.filtrate.dump_pickle(filename=dump_to)
-            #self.filtrate.dump(filename=dump_to)
+        if cache_dir:
+            fn = 'coupler_' + hash(sources, targets, earthmodel, phases)
+            self.filtrate.dump_pickle(filename=pjoin(cache_dir, fn))
 
     def ray_length(self, arrival):
         z, x, t = arrival.zxt_path_subdivided()
