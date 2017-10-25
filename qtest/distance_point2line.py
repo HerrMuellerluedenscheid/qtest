@@ -8,12 +8,13 @@ from pyrocko import orthodrome as ortho
 from pyrocko import util
 from pyrocko.gf import Target, meta, SourceWithMagnitude
 from pyrocko.guts import List, Object, String, Float
-import progressbar
 import logging
 import sys
 import os
 from qtest.invert import Ray3D, Ray3DDiscretized
 from vtk_graph import vtk_ray, render_actors, vtk_point
+import hashlib
+
 
 logger = logging.getLogger()
 
@@ -84,7 +85,7 @@ class Filtrate(Object):
         return pickle.load(open(filename, 'rb'))
 
 
-def hash(source, targets, earthmodel, phases):
+def filename_hash(sources, targets, earthmodel, phases):
     hstr = ''
     for s in sources:
         hstr += str(s)
@@ -116,12 +117,10 @@ class Coupler():
         self.hookup = Hookup.from_locations(targets)
         failed = 0
         passed = 0
+        nsources = len(sources)
         logger.info('start coupling events')
-        widgets = ['event couples ', progressbar.Percentage(), progressbar.Bar()]
-        pb = progressbar.ProgressBar(maxval=len(sources), widgets=widgets).start()
         actors = []
         for i_e, ev in enumerate(sources):
-            #pb.update(i_e)
             #actors.append(vtk_point(self.hookup(ev)))
             for i_t, t in enumerate(targets):
                 if not self.is_relevant(ev, t, check_relevance_by):
@@ -129,7 +128,7 @@ class Coupler():
                 arrivals = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth) 
 
                 if len(arrivals) == 0:
-                    print 'no arrival', t, ev.depth, phases
+                    print('no arrival', t, ev.depth, phases)
                     continue
                 # first arrivals
                 arrival = arrivals[0]
@@ -137,7 +136,7 @@ class Coupler():
                 try:
                     n, e, d, travel_times = project2enz(arrival, ev.azibazi_to(t)[0])
                 except IndexError as err:
-                    print '!!!Error> ', err
+                    print('!!!Error> ', err)
                     continue
 
                 n = n * cake.d2m
@@ -162,28 +161,27 @@ class Coupler():
                     aout = get_passing_distance(points_of_segments, num.array(ned_cmp))
                     if aout:
                         td, pd, total_td, sgmts = aout
-                        #ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
+                        travel_time_segment = travel_times[0][:sgmts.shape[1]][-1]
+                        # ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
                         #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
                         passed += 1
                         self.filtrate.couples.append((
                             ev, cmp_e, t,
                             float(td), float(pd), float(total_td),
-                            incidence_angle))
-                            #, ray))
-
+                            incidence_angle, travel_time_segment
+                            ))
                     continue
 
-            pb.update(i)
             i += 1
-        pb.finish()
+            print('%s / %s' % (i, nsources))
         # VTK
         # render_actors(actors)
-        print 'failed: %s, passed:%s ' % (failed, passed)
+        print('failed: %s, passed:%s ' % (failed, passed))
         if passed == 0:
             raise Exception('Coupling failed')
 
         if cache_dir:
-            fn = 'coupler_' + hash(sources, targets, earthmodel, phases)
+            fn = 'coupler_' + filename_hash(sources, targets, earthmodel, phases)
             self.filtrate.dump_pickle(filename=pjoin(cache_dir, fn))
 
     def ray_length(self, arrival):
@@ -206,8 +204,9 @@ class Coupler():
         has_segments = True
         #if isinstance(data, Filtrate):
         #has_segments = False
+
         for r in data:
-            e1, e2, t, traveled_d, passing_d, totald, incidence_angle = r
+            e1, e2, t, traveled_d, passing_d, totald, incidence_angle, travel_time_segment = r
             #e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
 
             if e1.magnitude > max_magnitude or e2.magnitude> max_magnitude:
@@ -232,7 +231,7 @@ class Coupler():
                 filtered.append(r)
         if len(filtered)==0:
             raise Exception('len(filtered) == 0!')
-        print '%s of %s pairs passed' %(len(filtered), len(data))
+        print('%s of %s pairs passed' %(len(filtered), len(data)))
         return filtered
 
 def get_passing_distance(ray_points, x0):
@@ -541,8 +540,8 @@ if __name__=='__main__':
     year = 2008
     webnet_stations = model.load_stations('/data/meta/stations.pf')
 
-    if True:
-        print 'loading'
+    if False:
+        print('loading')
         load_and_show('hitcount_%s.txt' %year)
         plot_stations(webnet_stations, ax=plt.gca())
         plt.gcf().savefig('hitcount_map_%s.png' % year)
@@ -556,7 +555,8 @@ if __name__=='__main__':
     earthmodel = cake.load_model('/data/models/earthmodel_malek_alexandrakis.nd')
     nevents = 80
     coupler = Coupler()
-    stations = make_station_grid(webnet_stations, num_n=5, num_e=5, edge_stretch=1.0)
+    stations = make_station_grid(webnet_stations, num_n=25, num_e=25,
+                                 edge_stretch=1.75)
     targets = [s2t(s) for s in stations]
     sources = [SourceWithMagnitude(lat=e.lat, lon=e.lon, depth=e.depth) for e in events]
     coupler.process(num.random.choice(sources, nevents), targets, earthmodel,
@@ -573,18 +573,18 @@ if __name__=='__main__':
     ax.imshow(grid.T)
 
     #hitcount_map(filtered, webnet_stations)
-    plt.show()
-    sys.exit(0)
-    distances = get_distances(filtered)
-    depths = get_depths(filtered)
-    fig = plt.figure()
-    ax = fig.add_subplot(211)
-    ax.hist(distances, bins=30)
-    ax.set_title('epicentral distances')
-    ax = fig.add_subplot(212)
-    ax.hist(depths, bins=30)
-    ax.set_title('source depths')
-    fig.savefig('epi_dists_depths_pairs_newdd2008.png')
+    #plt.show()
+    #sys.exit(0)
+    #distances = get_distances(filtered)
+    #depths = get_depths(filtered)
+    #fig = plt.figure()
+    #ax = fig.add_subplot(211)
+    #ax.hist(distances, bins=30)
+    #ax.set_title('epicentral distances')
+    #ax = fig.add_subplot(212)
+    #ax.hist(depths, bins=30)
+    #ax.set_title('source depths')
+    #fig.savefig('epi_dists_depths_pairs_newdd2008.png')
     #hitcount_pie(hitcount, colormap)
     #hitcount_map(hitcount, webnet_stations, events)
     plt.show()
