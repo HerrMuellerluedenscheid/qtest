@@ -1,6 +1,7 @@
 import numpy as num
-from rupture_size import radius as source_radius
+from .rupture_size import radius as source_radius
 from pyrocko.guts import Object, Float
+
 
 def brune(t, sigma, r, beta, mu, z, a):
     '''
@@ -17,6 +18,7 @@ def brune(t, sigma, r, beta, mu, z, a):
     b = 2.33*beta / a
     u1 = sigma*beta/mu * (t-r/beta) * num.exp(-b*(t-r/beta)) # principles of seismology
     return u1
+
 
 def brune_omega(w, sigma, r, beta, mu, z, a):
     '''

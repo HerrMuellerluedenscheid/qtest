@@ -5,7 +5,7 @@ from pyrocko import moment_tensor
 from pyrocko.gf import RectangularSource, DCSource, meta
 from pyrocko.guts import Float, String, Int
 
-from brune import Brune
+from .brune import Brune
 import matplotlib as mpl
 
 d2r = math.pi/180.
@@ -253,7 +253,7 @@ class LineSource(DCSource):
 
         #i_sources sollte eher i_sources/2. sein!
         north_shifts = num.arange(-dz*self.i_sources, dz*self.i_sources, dz)
-        print 'line_source_points ', north_shifts
+        print('line_source_points %s' % north_shifts)
 
         times = num.ones(len(north_shifts)) * (north_shifts[-1]-north_shifts[0])/self.velocity
         n = times.size

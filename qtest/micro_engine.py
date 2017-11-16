@@ -39,9 +39,6 @@ def check_method(method):
         return True
 
 
-
-
-
 pjoin = os.path.join
 
 logger = logging.getLogger('root')

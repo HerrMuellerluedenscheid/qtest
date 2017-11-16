@@ -129,7 +129,6 @@ class RayCastModel(grid.Carthesian3DGrid):
             ymin=mins[1], ymax=maxs[1],
             zmin=mins[2], zmax=maxs[2],
             dx=dx, dy=dy, dz=dz)
-        print o._shape()
         return o
 
     @classmethod

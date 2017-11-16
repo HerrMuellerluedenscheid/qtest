@@ -2,13 +2,13 @@ import numpy as num
 from pyrocko import moment_tensor
 from pyrocko.gf import Target
 from matplotlib import pyplot as plt
-from brune import Brune
-from rupture_size import radius as source_radius
-from sources import DCSourceWid, RectangularBrunesSource
+from .brune import Brune
+from .rupture_size import radius as source_radius
+from .sources import DCSourceWid, RectangularBrunesSource
 try:
     from pyrocko.gf import BoxcarSTF, TriangularSTF, HalfSinusoidSTF#, GaussSTF
 except ImportError as e:
-    print 'CHANGE BRANCHES'
+    print('CHANGE BRANCHES')
     raise e
 
 
@@ -35,7 +35,7 @@ def radius2fc(r, k=0.32, beta=3500):
 def fmin_by_magnitude(magnitude, stress=10., vr=3500):
     Mo = moment_tensor.magnitude_to_moment(magnitude)
     #duration = M02tr(Mo, stress, vr)
-    #print duration
+    #print(duration)
     #return 1./duration
     # 
     # Source parameters of the swarm earthquakes in West Bohemia/Vogtland,
@@ -172,8 +172,8 @@ def e2circulars(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
         mag = e.magnitude
     a = source_radius([mag])
     #d = num.sqrt(a[0])
-    print 'magnitude: ', mag
-    print 'source radius: ', a
+    print('magnitude: ', mag)
+    print('source radius: ', a)
     if nucleation_radius is not None:
         nucleation_x, nucleation_y = (num.random.random(2)-0.5)*2.*nucleation_radius
         nucleation_x = float(nucleation_x)
@@ -183,11 +183,11 @@ def e2circulars(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
     #nucleation_x = 0.95
     #nucleation_y = 0.
     stf = get_stf(mag, type=stf_type)
-    print nucleation_x, nucleation_y
-    print mt.strike1, mt.strike2
-    print mt.dip1, mt.dip2
-    print mt.rake1, mt.rake2
-    print '.'*80
+    print(nucleation_x, nucleation_y)
+    print(mt.strike1, mt.strike2)
+    print(mt.dip1, mt.dip2)
+    print(mt.rake1, mt.rake2)
+    print('.'*80)
     return CircularBrunesSource(
        lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
        east_shift=east_shift, time=e.time, radius=float(a[0]),

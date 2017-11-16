@@ -369,7 +369,7 @@ class SyntheticCouple():
 
             #f_n, a_n = tracer.noise_spectrum(self.method, filters=self.filters)
             #power_noise = util.power(f_n, a_n)
-            print f.shape, a_noise.shape, a_signal.shape
+            print(f.shape, a_noise.shape, a_signal.shape)
             fxfy = num.vstack((f, a_noise, a_signal))
             self.spectra.spectra.append((tracer, fxfy))
 
@@ -647,9 +647,9 @@ class QInverter3D:
             #import pdb
             #pdb.set_trace()
             e = num.sum(num.abs((num.sum(self.G * test_model * weights, axis=1) - self.slopes)))
-            print 'error=', e
-            print 'test_model average', num.average(test_model)
-            print 'test_model min, max', num.min(test_model), num.max(test_model)
+            print('error=', e)
+            print('test_model average', num.average(test_model))
+            print('test_model min, max', num.min(test_model), num.max(test_model))
             return e
 
         initial_guess = num.ones((nx, ny, nz)) * 1./qstart/num.pi
@@ -685,15 +685,16 @@ class QInverter3D:
         if False:
             import time
             for q in num.linspace(10,1000, 30):
-                print '------------'
-                print q*num.pi
+                print('------------')
+                print(q*num.pi)
                 initial_guess = num.ones((nx* ny* nz)) * 1./q
                 t1 = time.time()
-                print search(initial_guess, penetration_duration=penetration_duration)
+                print(search(initial_guess,
+                             penetration_duration=penetration_duration))
                 t2 = time.time()
-                print searchOLD(initial_guess)
+                print(searchOLD(initial_guess))
                 t3 = time.time()
-                print t2-t1, t3-t2
+                print(t2-t1, t3-t2)
 
 
         logger.info('Optimizer finished with state: %s' % result.success)
@@ -922,8 +923,8 @@ class QInverter:
         #if abs(len(indxinvert)-len(indxall))<2:
         #    logger.warn('bad results')
         #    return 
-        print 'len indx', len(indx)
-        print 'len indxinvert', len(indxinvert)
+        print('len indx %s' % len(indx))
+        print('len indxinvert %s' % len(indxinvert))
 
         markersize = 1.
         alpha = 0.8
@@ -995,7 +996,7 @@ class QInverter:
             else:
                 raise Exception("Index in None of them")
         all_combis = list(set(target_combis)) 
-        print 'all combis:', all_combis
+        print('all combis: %s' % all_combis)
         n_want = len(all_combis)
         nrows = num.max((int(num.ceil(num.sqrt(n_want+1))), 2))
         ncols = num.max((int(num.ceil(float(n_want)/nrows)), 2))

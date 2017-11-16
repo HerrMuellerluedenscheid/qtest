@@ -1,7 +1,7 @@
 import vtk
 import numpy as num
 from vtk.util import numpy_support
-from qtest import invert
+from .qtest import invert
 
 
 def numpy_to_vtk(a):

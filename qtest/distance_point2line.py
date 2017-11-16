@@ -11,8 +11,8 @@ from pyrocko.guts import List, Object, String, Float
 import logging
 import sys
 import os
-from qtest.invert import Ray3D, Ray3DDiscretized
-from vtk_graph import vtk_ray, render_actors, vtk_point
+from .invert import Ray3D, Ray3DDiscretized
+from .vtk_graph import vtk_ray, render_actors, vtk_point
 import hashlib
 
 
