@@ -42,6 +42,9 @@ class QConfig(Object):
     synthetic_config = SyntheticTestConfig.T(optional=True)
     fn_couples = String.T(optional=True, default='/tmp/couples')
     plot = Bool.T(default=False)
+    noise_window_shift = Float.T(default=0.,
+        help='if zero, noise measure taken from window preceding phase window.'
+                                 '[seconds]')
 
     def __init__(self, *args, **kwargs):
         Object.__init__(self, *args, **kwargs)

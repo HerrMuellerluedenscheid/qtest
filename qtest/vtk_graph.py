@@ -1,7 +1,13 @@
-import vtk
+try:
+    import vtk
+    from vtk.util import numpy_support
+except ImportError as e:
+    print(e)
+    print("NO vtk extension available")
+
+
 import numpy as num
-from vtk.util import numpy_support
-from .qtest import invert
+from . import invert
 
 
 def numpy_to_vtk(a):

@@ -71,7 +71,7 @@ fail_counter['low_snr'] = Counter('Low SNR')
 fail_counter['cc'] = Counter('Low CC')
 fail_counter['rmse'] = Counter('RMSE')
 fail_counter['IndexError'] = Counter('IndexError')
-fail_counter['IndexError'] = Counter('Low rsquared')
+fail_counter['rsquared'] = Counter('Low rsquared')
 fail_counter['slope'] = Counter('WARN: slope is NAN')
 
 
@@ -241,6 +241,8 @@ def run_qopher(config):
 
         t_noise1 = (tmax_group1 - tmin_group1) * 2
         t_noise2 = (tmax_group2 - tmin_group2) * 2
+        #t_noise1 = (tmax_group1 - tmin_group1 + config.noise_window_shift) * 2
+        #t_noise2 = (tmax_group2 - tmin_group2 + config.noise_window_shift) * 2
 
         try:
             tr1 = list(data_pile.chopper(
