@@ -80,28 +80,30 @@ def run_qopher(config):
     phases = [cake.PhaseDef(config.want_phase), cake.PhaseDef(config.want_phase.lower())]
 
     velocity_model = cake.load_model(config.earthmodel)
-    events = model.load_events(config.events)
-    events = filter(lambda x: config.mag_max>=x.magnitude>=config.mag_min, events)
-    if config.tstart:
-        events = filter(lambda x: x.time > util.stt(config.tstart), events)
-    if config.tstop:
-        events = filter(lambda x: x.time < util.stt(config.tstop), events)
-    events_by_time = {}
-    for e in events:
-        events_by_time[e.time] = e
+    events_load = model.load_events(config.events)
+    events = []
+    for e in events_load:
+        if config.tstart and e.time < util.stt(config.tstart):
+            continue
+        if config.tstop and e.time > util.tts(config.tstop):
+            continue
+        if config.mag_min and e.magnitude < config.mag_min:
+            continue
+
+        events.append(e)
 
     sources = [e2s(e) for e in events]
 
     stations = model.load_stations(config.stations)
     if config.whitelist:
-        #stations = filter(lambda x: '.'.join(x.nsl()) in config.whitelist, stations)
         stations = [s for s in stations if '.'.join(s.nsl()) in config.whitelist]
+
     if len(stations) == 0:
         raise Exception('No stations excepted by whitelist')
 
     targets = [s2t(s, channel=config.channel) for s in stations]
     markers = Marker.load_markers(config.markers)
-    markers = filter(lambda x: isinstance(x, PhaseMarker), markers)
+    markers = [pm for pm in markers if isinstance(pm, PhaseMarker)]
     data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
 
     reset_events(markers, events)
@@ -120,7 +122,7 @@ def run_qopher(config):
             sources, targets, config.earthmodel, phases))
     try:
         coupler = Coupler(Filtrate.load_pickle(fn_cache))
-    except IOError:
+    except (IOError, FileNotFoundError) as e:
         if not os.path.isdir(config.fn_couples):
             os.mkdir(config.fn_couples)
         coupler = Coupler()
@@ -167,43 +169,38 @@ def run_qopher(config):
         for source in [s1, s2]:
             # s2 should be closer, hence it should be less affected by Q
             phase_key = (config.want_phase, (source, t.codes[:3]))
-            tmin1 = pie.t(*phase_key)
-            if not tmin1:
+            tmin = pie.t(*phase_key)
+            if not tmin:
                 fail_counter['no_onset']()
-                break 
+                break
 
-            if tmin1 < 10000.:
-                tmin1 = source.time + tmin1
+            if tmin < 10000.:
+                tmin = source.time + tmin
 
             # grab trace segment of source:
-            tmin_group1 = tmin1 - config.window_length * (1.-config.position)
-            tmax_group1 = tmin1 + config.window_length * config.position
-            tmin_noise1 = tmin_group1 - config.window_length - \
-                config.noise_window_shift
-            tmax_noise1 = tmin_noise1 + config.window_length
-            if not data_pile.is_relevant(tmin_group1, tmax_group1, group_selector):
+            tmin = tmin - config.window_length * (1.-config.position)
+            tmax = tmin + config.window_length * config.position
+            tmax_noise = tmin - config.noise_window_shift
+            tmin_noise = tmax_noise - config.window_length
+            if not data_pile.is_relevant(tmin, tmax, group_selector):
                 fail_counter['no_waveforms']()
                 no_waveforms.append(phase_key)
-                break 
+                break
 
             try:
                 tr1 = list(data_pile.chopper(
                     trace_selector=selector,
-                    tmin=tmin_group1, tmax=tmax_group1))[0][0]
+                    tmin=tmin, tmax=tmax))[0][0]
                 tr1_noise = list(data_pile.chopper(
                     trace_selector=selector,
-                    tmin=tmin_noise1, tmax=tmax_noise1))[0][0]
-
-                tr1.shift(-tr1.tmin)
-                tr1_noise.shift(-tr1.tmin)
-                print(tmin_group1, tmin_noise1)
-                print(tmax_group1, tmax_noise1)
-
-
+                    tmin=tmin_noise, tmax=tmax_noise))[0][0]
+                tshift = -tr1.tmin
+                tr1.shift(tshift)
+                tr1_noise.shift(tshift)
                 trs.append((tr1, tr1_noise))
             except IndexError as e:
                 fail_counter['IndexError']()
-                break 
+                break
 
         if len(trs) != 2:
             continue
@@ -225,10 +222,10 @@ def run_qopher(config):
         f1, a1 = get_spectrum(y1, tr1.deltat, config)
         f2, a2 = get_spectrum(y2, tr2.deltat, config)
         if config.snr:
-            a1_noise, _ = get_spectrum(y1_noise, tr1.deltat, config)
-            a2_noise, _ = get_spectrum(y2_noise, tr2.deltat, config)
+            _, a1_noise = get_spectrum(y1_noise, tr1.deltat, config)
+            _, a2_noise = get_spectrum(y2_noise, tr2.deltat, config)
             if min(a1/a1_noise) < config.snr or min(a2/a2_noise) < config.snr:
-                fail_counter['low_snr'](e)
+                fail_counter['low_snr']()
                 continue
 
         ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
@@ -279,17 +276,8 @@ def run_qopher(config):
 
             axs[2].set_title('log')
 
-            #ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
-            #ratio_selected = ratio[indx]
-            #slope, intercept, r_value, p_value, std_err = stats.linregress(
-            #    f1[indx], ratio[indx])
             print("slope %s, rvalue %s, pvalue %s" % (slope, r_value, p_value))
 
-            # axs[3].plot(f_selected, ratio_selected)
-            # axs[3].plot([config.fmin_lim, config.fmax_lim], [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
-            # axs[3].set_title('log(sqrt/sqrt), R=%s, cc=%s' % (r_value, cc))
-            # print('>0, <0: %s, %s' % (slope_positive, slope_negative))
-            print(dir_png)
             fig.savefig(pjoin(dir_png, 'example_wave_spectra_%s.png' % icand))
             #fig.close()
 
@@ -299,14 +287,14 @@ def run_qopher(config):
             counter[t.codes][1] += 1
         # qs.append(slope/ray.t[-1])
         qs.append(slope/travel_time_segment)
-        
+
         print("slope %s" % slope)
 
     print(qs)
     status_str = ''
     for k, v in fail_counter.items():
         status_str += "%s\n" % v
-    
+
     with open(pjoin(config.outdir, 'status.txt'), 'w') as f:
         f.write(status_str)
         f.write('median 1./q = %s\n' % num.median(qs))
