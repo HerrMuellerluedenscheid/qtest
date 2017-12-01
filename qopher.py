@@ -32,17 +32,9 @@ def get_spectrum(ydata, deltat, config):
     ''' Return the spectrum on *ydata*, considering the *snr* stored in
     config
     '''
-    isplit = int(len(ydata) / 2)
-    a, f = mtspec(data=ydata[isplit:isplit*2], delta=deltat, number_of_tapers=config.ntapers,
-        time_bandwidth=config.time_bandwidth, nfft=trace.nextpow2(isplit)*2)
-
-    if config.snr:
-        a_noise, _ = mtspec(data=ydata[0:isplit], delta=deltat, number_of_tapers=config.ntapers,
-            time_bandwidth=config.time_bandwidth, nfft=trace.nextpow2(isplit)*2)
-        
-        snr = min(a/a_noise)
-        if snr < config.snr:
-            raise SNRException('low SNR: %s' % snr)
+    #isplit = int(len(ydata) / 2)
+    a, f = mtspec(data=ydata, delta=deltat, number_of_tapers=config.ntapers,
+        time_bandwidth=config.time_bandwidth, nfft=trace.nextpow2(len(ydata))*2)
 
     #  plt.figure()
     #  plt.plot(ydata[isplit:isplit*2])
@@ -76,58 +68,12 @@ fail_counter['slope'] = Counter('WARN: slope is NAN')
 
 
 def run_qopher(config):
-    # config.markers = 'picks_part.pf'
-    # channel = 'HHZ'
-    # fn_traces = '/media/usb/webnet/wern/rest'
-    # # fileformat = 'mseed'
-    # # fn_stations = '/data/meta/stations_sachsennetz.pf'
-
-    # channel = 'SHZ'
-    # # fn_traces = '/data/webnet/pole_zero/restituted_displacement_new'
-    # fn_traces = '/data/webnet/gse2/2008Oct'
-    # fileformat = 'gse2'
-    # fn_stations = '/data/meta/stations.pf'
-
-    # outdir_suffix = 'all_less_strict'
-    # outdir = 'qopher.out'
-    # # window_length = 0.2
-    # window_length = 0.15
-    # fn_coupler = 'couples'
-    # minimum_magnitude = 1.
-    # maximum_magnitude = 3.
-    # min_travel_distance = 400.
-    # threshold_pass_factor = 4.
-    # max_mag_diff = 0.1
-    # want_phase = 'P'
-    # time_bandwidth = 5.
-    # ntapers = 3
-    # fmin = 50.
-    # # fmax = 65.
-    # fmax = 75.
-    # min_cc = None
-    # # min_cc = 0.7
-    # min_rsquared = None
-    # # min_rsquared = 0.5
-
-    # # rmse_max = 10000.
-    # rmse_max = None
-    # position = 0.9
-    # # fn_events = '/home/marius/josef_dd/events_from_sebastian.pf'
-    # fn_events = '/home/marius/josef_dd/events_from_sebastian_check_M1.pf'
-    # fn_earthmodel = '/data/models/earthmodel_malek_alexandrakis.nd'
-    # # define stations to use
-    # do_plot = True
-
-    # white_list = [
-    #     #('', 'KRC', ''),
-    #     #('', 'KAC', ''),
-    #     #('', 'POC', ''),
-    #     ('', 'NKC', ''),
-    #     #('', 'LBC', ''),
-    #     #('SX', 'WERN', ''),
-    # ]
     if not os.path.isdir(config.outdir):
         os.mkdir(config.outdir)
+
+    dir_png = pjoin(config.outdir, 'trace-plots')
+    if not os.path.exists(dir_png):
+        os.mkdir(dir_png)
 
     config.dump(filename=pjoin(config.outdir, 'config.yaml'))
 
@@ -148,9 +94,11 @@ def run_qopher(config):
 
     stations = model.load_stations(config.stations)
     if config.whitelist:
-        stations = filter(lambda x: '.'.join(x.nsl()) in config.whitelist, stations)
+        #stations = filter(lambda x: '.'.join(x.nsl()) in config.whitelist, stations)
+        stations = [s for s in stations if '.'.join(s.nsl()) in config.whitelist]
     if len(stations) == 0:
         raise Exception('No stations excepted by whitelist')
+
     targets = [s2t(s, channel=config.channel) for s in stations]
     markers = Marker.load_markers(config.markers)
     markers = filter(lambda x: isinstance(x, PhaseMarker), markers)
@@ -164,11 +112,14 @@ def run_qopher(config):
         event2source=e2s,
         station2target=s2t)
 
-    pie.process_markers(config.want_phase, stations=stations, channel=config.channel)
+    pie.process_markers(
+        config.want_phase, stations=stations, channel=config.channel)
 
+    fn_cache = os.path.join(
+        config.fn_couples, 'coupler_' + filename_hash(
+            sources, targets, config.earthmodel, phases))
     try:
-        fn = os.path.join(config.fn_couples, 'coupler_' + filename_hash(sources, targets, config.earthmodel, phases))
-        coupler = Coupler(Filtrate.load_pickle(fn))
+        coupler = Coupler(Filtrate.load_pickle(fn_cache))
     except IOError:
         if not os.path.isdir(config.fn_couples):
             os.mkdir(config.fn_couples)
@@ -180,7 +131,7 @@ def run_qopher(config):
             phases,
             check_relevance_by=data_pile,
             ignore_segments=False,
-            cache_dir=config.fn_couples)
+            fn_cache=fn_cache)
 
     candidates = coupler.filter_pairs(
         config.traversing_ratio,
@@ -196,100 +147,101 @@ def run_qopher(config):
     slope_positive = 0
     slope_negative = 0
 
-    events = {}
     slopes = []
     qs = []
     cc = None
-
-
+    no_waveforms = []
     ncandidates = len(candidates)
     for icand, candidate in enumerate(candidates):
         print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
         s1, s2, t, td, pd, totald, i1, travel_time_segment = candidate
 
-        for s in [s1, s2]:
-            events[s.time] = events_by_time[s.time]
+        phase_keys = [(config.want_phase, (s, t.codes[:3])) for s in [s1, s2]]
+        if any([pk in no_waveforms for pk in phase_keys]):
+            continue
 
         selector = lambda x: (x.station, x.channel)==(t.codes[1], t.codes[3])
         group_selector = lambda x: t.codes[1] in x.stations
-        # s2 should be closer, hence it should be less affected by Q
-        onset1 = pie.t(config.want_phase, (s1, t.codes[:3]))
-        onset2 = pie.t(config.want_phase, (s2, t.codes[:3]))
-        if not onset1 or not onset2:
-            fail_counter['no_onset']()
+
+        trs = []
+        for source in [s1, s2]:
+            # s2 should be closer, hence it should be less affected by Q
+            phase_key = (config.want_phase, (source, t.codes[:3]))
+            tmin1 = pie.t(*phase_key)
+            if not tmin1:
+                fail_counter['no_onset']()
+                break 
+
+            if tmin1 < 10000.:
+                tmin1 = source.time + tmin1
+
+            # grab trace segment of source:
+            tmin_group1 = tmin1 - config.window_length * (1.-config.position)
+            tmax_group1 = tmin1 + config.window_length * config.position
+            tmin_noise1 = tmin_group1 - config.window_length - \
+                config.noise_window_shift
+            tmax_noise1 = tmin_noise1 + config.window_length
+            if not data_pile.is_relevant(tmin_group1, tmax_group1, group_selector):
+                fail_counter['no_waveforms']()
+                no_waveforms.append(phase_key)
+                break 
+
+            try:
+                tr1 = list(data_pile.chopper(
+                    trace_selector=selector,
+                    tmin=tmin_group1, tmax=tmax_group1))[0][0]
+                tr1_noise = list(data_pile.chopper(
+                    trace_selector=selector,
+                    tmin=tmin_noise1, tmax=tmax_noise1))[0][0]
+
+                tr1.shift(-tr1.tmin)
+                tr1_noise.shift(-tr1.tmin)
+                print(tmin_group1, tmin_noise1)
+                print(tmax_group1, tmax_noise1)
+
+
+                trs.append((tr1, tr1_noise))
+            except IndexError as e:
+                fail_counter['IndexError']()
+                break 
+
+        if len(trs) != 2:
             continue
 
-        if onset1 < 10000:
-            tmin1 = s1.time + onset1
-        else:
-            tmin1 = onset1
-
-        if onset2 < 10000:
-            tmin2 = s2.time + onset2
-        else:
-            tmin2 = onset2
-
-        # grab trace segment of source:
-        tmin_group1 = tmin1 - config.window_length * (1-config.position)
-        tmin_group2 = tmin2 - config.window_length * (1-config.position)
-        tmax_group1 = tmin1 + config.window_length * config.position
-        tmax_group2 = tmin2 + config.window_length * config.position
-        if not data_pile.is_relevant(tmin_group1, tmax_group1, group_selector) or \
-                not data_pile.is_relevant(tmin_group2, tmax_group2, group_selector):
-            fail_counter['no_waveforms']()
-            continue
-
-        t_noise1 = (tmax_group1 - tmin_group1) * 2
-        t_noise2 = (tmax_group2 - tmin_group2) * 2
-        #t_noise1 = (tmax_group1 - tmin_group1 + config.noise_window_shift) * 2
-        #t_noise2 = (tmax_group2 - tmin_group2 + config.noise_window_shift) * 2
-
-        try:
-            tr1 = list(data_pile.chopper(
-                trace_selector=selector,
-                tmin=tmin_group1-t_noise1, tmax=tmax_group1))[0][0]
-
-            tr2 = list(data_pile.chopper(
-                trace_selector=selector,
-                tmin=tmin_group2-t_noise2, tmax=tmax_group2))[0][0]
-
-        except IndexError as e:
-            fail_counter['IndexError']()
-            continue
-
+        (tr1, tr1_noise), (tr2, tr2_noise) = trs
         if config.cc_min:
             cc = trace.correlate(tr1, tr2, normalization='normal').max()[1]
             if cc < config.cc_min:
                 fail_counter['cc'](cc)
                 continue
 
-        y1 = tr1.ydata
-        y2 = tr2.ydata
+        nsamples_want = min(tr1.data_len(), tr2.data_len())
 
-        nsamples_want = min(len(y1), len(y2))
-        # nsamples_want = window
+        y1 = tr1.ydata[:nsamples_want]
+        y2 = tr2.ydata[:nsamples_want]
+        y1_noise = tr1_noise.ydata[:nsamples_want]
+        y2_noise = tr2_noise.ydata[:nsamples_want]
 
-        y1 = y1[:nsamples_want]
-        y2 = y2[:nsamples_want]
-
-        try:
-            f1, a1 = get_spectrum(y1, tr1.deltat, config)
-            f2, a2 = get_spectrum(y2, tr2.deltat, config)
-        except SNRException as e:
-            fail_counter['low_snr'](e)
-            continue
-
-        f = f1
+        f1, a1 = get_spectrum(y1, tr1.deltat, config)
+        f2, a2 = get_spectrum(y2, tr2.deltat, config)
+        if config.snr:
+            a1_noise, _ = get_spectrum(y1_noise, tr1.deltat, config)
+            a2_noise, _ = get_spectrum(y2_noise, tr2.deltat, config)
+            if min(a1/a1_noise) < config.snr or min(a2/a2_noise) < config.snr:
+                fail_counter['low_snr'](e)
+                continue
 
         ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
 
-        indx = num.intersect1d(num.where(f>=config.fmin_lim), num.where(f<=config.fmax_lim))
-        f_selected = f[indx]
+        indx = num.intersect1d(
+            num.where(f1>=config.fmin_lim),
+            num.where(f1<=config.fmax_lim))
+
+        f_selected = f1[indx]
 
         ratio_selected = ratio[indx]
         slope, intercept, r_value, p_value, std_err = stats.linregress(
             f_selected, ratio[indx])
-
         if config.rmse_max:
             # RMS Error:
             RMSE = num.sqrt(num.sum((ratio[indx]-(intercept+f_selected*slope))**2)/float(len(f_selected)))
@@ -307,36 +259,39 @@ def run_qopher(config):
             continue
 
         if config.plot:
-            fig, axs = plt.subplots(4,1)
-            axs[0].plot(y1)
-            axs[0].plot(y2)
+            fig, axs = plt.subplots(3,1)
+            axs[0].plot(tr1.get_xdata(), tr1.get_ydata())
+            axs[0].plot(tr2.get_xdata(), tr2.get_ydata())
+            axs[0].plot(tr1_noise.get_xdata(), tr1_noise.get_ydata(), color='grey')
+            axs[0].plot(tr2_noise.get_xdata(), tr2_noise.get_ydata(), color='grey')
             axs[0].set_ylabel('A [count]')
             axs[0].set_xlabel('Time [s]')
             axs[0].set_title('P Wave')
 
-            axs[1].plot(f, a1)
-            axs[1].plot(f, a2)
+            axs[1].plot(f1, a1)
+            axs[1].plot(f2, a2)
             axs[1].set_yscale('log')
             axs[1].set_xlabel('f [Hz]')
 
             axs[2].plot(f_selected, ratio_selected)
-            axs[2].plot([config.fmin_lim, config.fmax_lim], [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
+            axs[2].plot([config.fmin_lim, config.fmax_lim],
+                        [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
 
             axs[2].set_title('log')
 
-            ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
-            ratio_selected = ratio[indx]
-            slope, intercept, r_value, p_value, std_err = stats.linregress(
-                f[indx], ratio[indx])
+            #ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
+            #ratio_selected = ratio[indx]
+            #slope, intercept, r_value, p_value, std_err = stats.linregress(
+            #    f1[indx], ratio[indx])
             print("slope %s, rvalue %s, pvalue %s" % (slope, r_value, p_value))
 
-            axs[3].plot(f_selected, ratio_selected)
-            axs[3].plot([config.fmin_lim, config.fmax_lim], [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
-            axs[3].set_title('log(sqrt/sqrt), R=%s, cc=%s' % (r_value, cc))
-            print('>0, <0: %s, %s, counter %s' % slope_positive, slope_negative, counter)
-
-            fig.savefig(
-                pjoin(config.outdir, '%s/example_wave_spectra_%s.png' % (tr1.station, int(tr1.tmin))))
+            # axs[3].plot(f_selected, ratio_selected)
+            # axs[3].plot([config.fmin_lim, config.fmax_lim], [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
+            # axs[3].set_title('log(sqrt/sqrt), R=%s, cc=%s' % (r_value, cc))
+            # print('>0, <0: %s, %s' % (slope_positive, slope_negative))
+            print(dir_png)
+            fig.savefig(pjoin(dir_png, 'example_wave_spectra_%s.png' % icand))
+            #fig.close()
 
         if slope>0:
             counter[t.codes][0] += 1

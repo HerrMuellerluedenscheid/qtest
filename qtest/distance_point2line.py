@@ -11,9 +11,14 @@ from pyrocko.guts import List, Object, String, Float
 import logging
 import sys
 import os
+import hashlib
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+
 from .invert import Ray3D, Ray3DDiscretized
 from .vtk_graph import vtk_ray, render_actors, vtk_point
-import hashlib
 
 
 logger = logging.getLogger()
@@ -74,14 +79,12 @@ class Filtrate(Object):
         return len(self.couples)
 
     def dump_pickle(self, filename):
-        import cPickle as pickle
         pickle.dump(self, open(filename, 'wb'))
         logger.info('dump cpickle: %s' % filename)
 
     @classmethod
     def load_pickle(cls, filename):
         logger.info('load cpickle: %s' % filename)
-        import cPickle as pickle
         return pickle.load(open(filename, 'rb'))
 
 
@@ -95,7 +98,7 @@ def filename_hash(sources, targets, earthmodel, phases):
     for phase in phases:
         hstr += str(phase)
 
-    return hashlib.sha1(hstr).hexdigest()
+    return hashlib.sha1(hstr.encode('utf-8')).hexdigest()
 
 
 class Coupler():
@@ -107,7 +110,7 @@ class Coupler():
         self.minimum_magnitude = -10
 
     def process(self, sources, targets, earthmodel, phases, ignore_segments=True,
-                cache_dir=None, check_relevance_by=False):
+                fn_cache=None, check_relevance_by=False):
 
         self.filtrate = Filtrate(
             sources=sources, targets=targets, phases=phases,
@@ -180,9 +183,8 @@ class Coupler():
         if passed == 0:
             raise Exception('Coupling failed')
 
-        if cache_dir:
-            fn = 'coupler_' + filename_hash(sources, targets, earthmodel, phases)
-            self.filtrate.dump_pickle(filename=pjoin(cache_dir, fn))
+        if fn_cache:
+            self.filtrate.dump_pickle(filename=fn_cache)
 
     def ray_length(self, arrival):
         z, x, t = arrival.zxt_path_subdivided()
