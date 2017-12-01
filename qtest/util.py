@@ -248,10 +248,10 @@ def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_t
 
 def reset_events(markers, events):
     for e in events:
-        marks = filter(lambda x: x.get_event_time()==e.time, markers)
-        for phase in set([m.get_phasename() for m in marks]):
-            work = filter(lambda x: x.get_phasename() == phase, marks)
-            map(lambda x: x.set_event(e), work)
+        for m in markers:
+            if m.get_event_time() != e.time:
+                continue
+            m.set_event(e)
 
 
 def s2t(s, channel='Z', store_id=None): 
