@@ -154,15 +154,25 @@ def run_qopher(config):
     cc = None
     no_waveforms = []
     ncandidates = len(candidates)
+
+    needs_rotation = False
+    if config.channel in ['LQT']:
+        needs_rotation = True
+
     for icand, candidate in enumerate(candidates):
         print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
-        s1, s2, t, td, pd, totald, i1, travel_time_segment = candidate
+        s1, s2, t, td, pd, totald, incidence, travel_time_segment = candidate
 
         phase_keys = [(config.want_phase, (s, t.codes[:3])) for s in [s1, s2]]
         if any([pk in no_waveforms for pk in phase_keys]):
             continue
 
-        selector = lambda x: (x.station, x.channel)==(t.codes[1], t.codes[3])
+        if needs_rotation:
+            selector = lambda x: True
+            in_channels = ['SHZ', 'SHN', 'SHE']
+        else:
+            selector = lambda x: (x.station, x.channel)==(t.codes[1], t.codes[3])
+
         group_selector = lambda x: t.codes[1] in x.stations
 
         trs = []
@@ -188,12 +198,23 @@ def run_qopher(config):
                 break
 
             try:
-                tr1 = list(data_pile.chopper(
-                    trace_selector=selector,
-                    tmin=tmin, tmax=tmax))[0][0]
-                tr1_noise = list(data_pile.chopper(
-                    trace_selector=selector,
-                    tmin=tmin_noise, tmax=tmax_noise))[0][0]
+                import pdb
+                pdb.set_trace()
+                tr1 = list(data_pile.chopper(trace_selector=selector,
+                    tmin=tmin, tmax=tmax))
+                tr1_noise = list(data_pile.chopper(trace_selector=selector,
+                    tmin=tmin_noise, tmax=tmax_noise))
+
+                if needs_rotation:
+                    backazimuth = source.azibazi_to(t)[1]
+                    trs_rot = rotate_to_lqt(tr1, backazimuth, incidence, in_channels)
+                    trs_rot_noise = rotate_to_lqt(tr1_noise, backazimuth, incidence, in_channels)
+                    tr1 = next((tr for tr in trs_rot if tr.channel=='Q'), None)
+                    tr1_noise = next((tr for tr in trs_rot if tr.channel=='Q'), None)
+                else:
+                    tr1 = tr1[0][0]
+                    tr1_noise = tr1_noise[0][0]
+
                 tshift = -tr1.tmin
                 tr1.shift(tshift)
                 tr1_noise.shift(tshift)
@@ -263,7 +284,7 @@ def run_qopher(config):
             axs[0].plot(tr2_noise.get_xdata(), tr2_noise.get_ydata(), color='grey')
             axs[0].set_ylabel('A [count]')
             axs[0].set_xlabel('Time [s]')
-            axs[0].set_title('P Wave')
+            axs[0].set_title('Channel: %s' % tr1.channel)
 
             axs[1].plot(f1, a1)
             axs[1].plot(f2, a2)
