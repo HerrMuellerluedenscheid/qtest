@@ -1,10 +1,19 @@
+#/usr/bin/env python3
+
 import matplotlib as mpl
-mpl.use('Agg')
+# mpl.use('Qt5Agg')
 
 import logging
 import numpy as num
 import os
 import sys
+try:
+    # python2
+    import cPickle as pickle
+except ImportError:
+    # python3
+    import pickle
+
 from scipy import stats
 from pyrocko import model
 from pyrocko import cake
@@ -41,6 +50,12 @@ def get_spectrum(ydata, deltat, config):
     #  plt.plot(ydata[0:isplit])
     #  plt.show()
     return f, a
+
+
+def dump_qstats(qstats_dict, config):
+    fn = pjoin(config.outdir, 'qstats.cpickle')
+    with open(fn, 'rb') as f:
+        pickle.dump(qstats_dict, f)
 
 
 class Counter:
@@ -142,6 +157,22 @@ def run_qopher(config):
         max_mag_diff=config.mag_delta_max
     )
 
+    from collections import defaultdict
+    pwrs = defaultdict(list)
+
+    def check_lqt(trs, trs_rotated):
+        '''Helper routine to verify power ratios.'''
+        def pwr(_tr_):
+            return num.sqrt(num.sum(tr.ydata**2))
+        for tr in trs:
+            pwrs[tr.channel].append(num.sqrt(num.sum(tr.ydata**2)))
+
+    def plot_lqt():
+        avg_t = num.mean(pwrs['T'])
+        for channel_id, vals in pwrs.items():
+            print(channel_id, num.mean(num.array(vals)/avg_t))
+        
+
     counter = {}
     for t in targets:
         counter[t.codes] = [0, 0]
@@ -156,19 +187,23 @@ def run_qopher(config):
     ncandidates = len(candidates)
 
     needs_rotation = False
-    if config.channel in ['LQT']:
+    if config.channel in 'LQT':
         needs_rotation = True
 
+    all_stats = []
     for icand, candidate in enumerate(candidates):
         print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
         s1, s2, t, td, pd, totald, incidence, travel_time_segment = candidate
+        if config.save_stats:
+            qstats = {'event1': s1, 'event2': s2, 'target': t, 'td': td, 'pd': pd,
+                     'totald': totald, 'incidence': incidence}
 
         phase_keys = [(config.want_phase, (s, t.codes[:3])) for s in [s1, s2]]
         if any([pk in no_waveforms for pk in phase_keys]):
             continue
 
         if needs_rotation:
-            selector = lambda x: True
+            selector = lambda x: x.station==t.codes[1]
             in_channels = ['SHZ', 'SHN', 'SHE']
         else:
             selector = lambda x: (x.station, x.channel)==(t.codes[1], t.codes[3])
@@ -198,22 +233,32 @@ def run_qopher(config):
                 break
 
             try:
-                import pdb
-                pdb.set_trace()
-                tr1 = list(data_pile.chopper(trace_selector=selector,
-                    tmin=tmin, tmax=tmax))
-                tr1_noise = list(data_pile.chopper(trace_selector=selector,
-                    tmin=tmin_noise, tmax=tmax_noise))
+                tr1 = next(data_pile.chopper(trace_selector=selector,
+                    tmin=tmin, tmax=tmax), None)
+                tr1_noise = next(data_pile.chopper(trace_selector=selector,
+                    tmin=tmin_noise, tmax=tmax_noise), None)
+
+                if tr1 is None or tr1_noise is None:
+                    fail_counter['no_waveforms']()
+                    continue
 
                 if needs_rotation:
                     backazimuth = source.azibazi_to(t)[1]
-                    trs_rot = rotate_to_lqt(tr1, backazimuth, incidence, in_channels)
-                    trs_rot_noise = rotate_to_lqt(tr1_noise, backazimuth, incidence, in_channels)
-                    tr1 = next((tr for tr in trs_rot if tr.channel=='Q'), None)
-                    tr1_noise = next((tr for tr in trs_rot if tr.channel=='Q'), None)
+                    trs_rot = trace.rotate_to_lqt(tr1, backazimuth, incidence, in_channels)
+                    trs_rot_noise = trace.rotate_to_lqt(tr1_noise, backazimuth, incidence, in_channels)
+                    tr1 = next((tr for tr in trs_rot if
+                                tr.channel==config.channel), None)
+                    tr1_noise = next((tr for tr in trs_rot_noise if
+                                      tr.channel==config.channel), None)
+
+                    check_lqt(trs_rot, tr1)
                 else:
-                    tr1 = tr1[0][0]
-                    tr1_noise = tr1_noise[0][0]
+                    tr1 = tr1[0]
+                    tr1_noise = tr1_noise[0]
+
+                if not tr1 or not tr1_noise:
+                    fail_counter['no_waveforms']()
+                    continue
 
                 tshift = -tr1.tmin
                 tr1.shift(tshift)
@@ -227,9 +272,10 @@ def run_qopher(config):
             continue
 
         (tr1, tr1_noise), (tr2, tr2_noise) = trs
-        if config.cc_min:
-            cc = trace.correlate(tr1, tr2, normalization='normal').max()[1]
-            if cc < config.cc_min:
+        if config.cc_min or config.save_stats:
+            cc = trace.correlate(
+                tr1, tr2, mode='same', normalization='normal').max()[1]
+            if config.cc_min and cc < config.cc_min:
                 fail_counter['cc'](cc)
                 continue
 
@@ -242,10 +288,12 @@ def run_qopher(config):
 
         f1, a1 = get_spectrum(y1, tr1.deltat, config)
         f2, a2 = get_spectrum(y2, tr2.deltat, config)
-        if config.snr:
+        if config.snr or config.save_stats:
             _, a1_noise = get_spectrum(y1_noise, tr1.deltat, config)
             _, a2_noise = get_spectrum(y2_noise, tr2.deltat, config)
-            if min(a1/a1_noise) < config.snr or min(a2/a2_noise) < config.snr:
+            snr1 = min(a1/a1_noise)
+            snr2 = min(a2/a2_noise)
+            if  snr1 < config.snr or snr2 < config.snr:
                 fail_counter['low_snr']()
                 continue
 
@@ -260,17 +308,26 @@ def run_qopher(config):
         ratio_selected = ratio[indx]
         slope, intercept, r_value, p_value, std_err = stats.linregress(
             f_selected, ratio[indx])
-        if config.rmse_max:
+        if config.rmse_max or config.save_stats:
             # RMS Error:
             RMSE = num.sqrt(num.sum((ratio[indx]-(intercept+f_selected*slope))**2)/float(len(f_selected)))
-            if RMSE > config.rmse_max:
+            if config.rmse_max and RMSE > config.rmse_max:
                 fail_counter['rmse']()
                 continue
 
-        if config.rsquared_min:
-            if r_value**2 < config.rsquared_min:
+        if config.rsquared_min or config.save_stats:
+            if config.rsquared_min and r_value**2 < config.rsquared_min:
                 fail_counter['rsquared'](r_value**2)
                 continue
+
+        if config.save_stats:
+            qstats['rsquared'] = r_value ** 2
+            qstats['rmse'] = RMSE
+            qstats['snr1'] = snr1
+            qstats['snr2'] = snr2
+            qstats['cc'] = cc
+            qstats['q'] = slope/travel_time_segment
+            all_stats.append(qstats)
 
         if num.isnan(slope):
             fail_counter['slope']()
@@ -285,7 +342,8 @@ def run_qopher(config):
             axs[0].set_ylabel('A [count]')
             axs[0].set_xlabel('Time [s]')
             axs[0].set_title('Channel: %s' % tr1.channel)
-
+            if cc is not None:
+                axs[0].text(0., 0., 'cc = %s' % cc, transform=axs[0].transAxes)
             axs[1].plot(f1, a1)
             axs[1].plot(f2, a2)
             axs[1].set_yscale('log')
@@ -311,6 +369,8 @@ def run_qopher(config):
 
         print("slope %s" % slope)
 
+    dump_qstats(qstats, config)
+
     print(qs)
     status_str = ''
     for k, v in fail_counter.items():
@@ -322,6 +382,7 @@ def run_qopher(config):
         f.write('Nsamples = %s\n' % len(qs))
         # f.write('Npositive = %s\n' % len(qs))
 
+    plot_lqt() 
     num.savetxt(pjoin(config.outdir, 'qs_inv.txt'), num.array(qs).T)
 
     fig = plt.figure()
