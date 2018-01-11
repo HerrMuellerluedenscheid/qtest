@@ -13,7 +13,7 @@ test_grid = {
     'time_bandwidth': [2, 4, 6],
     'position': [0.9, 0.7, 0.5],
     'window_length': [0.1, 0.2, 0.3],
-    'traversing_distance_min': [200., 400., 600],
+    'traversing_distance_min': [200.],
     'traversing_ratio': [1., 2., 4.],
 }
 
@@ -32,5 +32,8 @@ for iexperi, e in enumerate(experiments):
     configs.append(config) 
 
 
-with concurrent.futures.ProcessPoolExecutor() as executor:
-    executor.map(run_qopher, configs)
+#with concurrent.futures.ProcessPoolExecutor() as executor:
+#    executor.map(run_qopher, configs)
+
+pool = multiprocessing.Pool()
+pool.map(run_qopher, configs)
