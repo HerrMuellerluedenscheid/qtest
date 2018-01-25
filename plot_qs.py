@@ -17,6 +17,54 @@ operator_dict = {
     '<=': 'le',
 }
 
+
+def read_dirs(args):
+    slopes = []
+    for result_dir in args.directories:
+        fn_config = os.path.join(result_dir, 'config.yaml')
+        f = os.path.join(result_dir, args.result_filename)
+        try:
+            d = num.loadtxt(f, ndmin=1)
+        except (ValueError, IOError) as e:
+            print('failed to read fn: %s' % f)
+            continue
+
+        if len(d) == 0:
+            print('File is empty %s ' % f)
+            continue
+
+        elif args.nmin and len(d) < args.nmin:
+            print('Too few datapoints: %s' % f)
+            continue
+
+        slopes.append((f, fn_config, d))
+    return slopes
+
+
+def prefilter(slopes, args):
+    if args.filter_column:
+        col, expr = args.filter_column.split(':')
+        compare, val = expr.split()
+        val = float(val)
+
+        def config_filter(conf):
+            cmp_ = getattr(opr, operator_dict[compare])
+            return cmp_(getattr(conf, col), val)
+    else:
+        def config_filter(conf):
+            return True
+
+    _slopes = []
+    for islope, (f, fn_config, sl) in enumerate(slopes):
+        conf = QConfig.load(filename=fn_config)
+        if not config_filter(conf):
+            continue
+        else:
+            _slopes.append((f, fn_config, sl))
+
+    return _slopes
+
+
 def is_number(s):
     try:
         float(s)
@@ -24,9 +72,7 @@ def is_number(s):
     except (ValueError, TypeError) as e:
         return False
 
-def cmp(a, b):
-    return (a > b) - (a < b)
-        
+
 def cleanup_axis(ax):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -65,13 +111,11 @@ def init_parameterdict(conf):
     return parameters_dict
 
 
-def print_sorted(data, filenames, sorted_colun=0, filter=None):
+def print_sorted(data, filenames, sorted_colun=0):
 
     indices = num.argsort(data[:, sorted_colun])
     n = len(data.T)
     for index in indices:
-        if not filter(data[index]):
-            continue
         d = ["%1.1f" % val for val in data[index]]
         print("{filename: <60} {data}".format(
             **{'filename': filenames[index],
@@ -104,25 +148,10 @@ if __name__ == '__main__':
         type=str, default=False)
     
     args = parser.parse_args()
-    slopes = []
-    for result_dir in args.directories:
-        fn_config = os.path.join(result_dir, 'config.yaml')
-        f = os.path.join(result_dir, args.result_filename)
-        try:
-            d = num.loadtxt(f, ndmin=1)
-        except (ValueError, IOError) as e:
-            print('failed to read fn: %s' % f)
-            continue
 
-        if len(d) == 0:
-            print('File is empty %s ' % f)
-            continue
+    slopes = read_dirs(args)
 
-        elif args.nmin and len(d) < args.nmin:
-            print('Too few datapoints: %s' % f)
-            continue
-
-        slopes.append((f, fn_config, d))
+    slopes = prefilter(slopes, args)
 
     parameters_dict = None
     nsl = len(slopes)
@@ -143,6 +172,7 @@ if __name__ == '__main__':
     nslopes = len(slopes)
     all_data = []
     filenames = []
+
     for islope, (f, fn_config, sl) in enumerate(slopes):
         filenames.append(f)
         if args.recip:
@@ -179,13 +209,13 @@ if __name__ == '__main__':
             for i in qc_dict.items():
                 txt += '%s: %1.4f\n' % i
 
-            ax.text(1., 1., txt, color='grey', size=7, transform=ax.transAxes,
-                    verticalalignment='top', horizontalalignment='right')
+            # ax.text(1., 1., txt, color='grey', size=7, transform=ax.transAxes,
+            #         verticalalignment='top', horizontalalignment='right')
 
             cleanup_axis(ax)
 
-        conf = QConfig.load(filename=fn_config)
         row_info = []
+        conf = QConfig.load(filename=fn_config)
         if parameters_dict is None:
             parameters_dict = init_parameterdict(conf)
         for k, v in conf.__dict__.items():
@@ -197,21 +227,22 @@ if __name__ == '__main__':
 
             row_info.append(v)
         all_data.append(row_info)
-
-    if args.filter_column:
-        col, expr = args.filter_column.split(':')
-        compare, val = expr.split()
-        val = float(val)
-        col = int(col)
-
-        def column_filter(row):
-            cmp_ = getattr(opr, operator_dict[compare])
-            return cmp_(row[col], val)
-    else:
-        def column_filter(row):
-            return True
-
-    print_sorted(num.array(all_data), filenames, args.sort_column, filter=column_filter)
+#
+#    if args.filter_column:
+#        col, expr = args.filter_column.split(':')
+#        compare, val = expr.split()
+#        val = float(val)
+#        col = int(col)
+#
+#        def column_filter(row):
+#            cmp_ = getattr(opr, operator_dict[compare])
+#            return cmp_(row[col], val)
+#    else:
+#        def column_filter(row):
+#            return True
+#
+    # print_sorted(num.array(all_data), filenames, args.sort_column, filter=column_filter)
+    print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
 
     if args.plot_hists:
         fig_hists.savefig(args.outfn + '.png')
