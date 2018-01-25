@@ -1,7 +1,7 @@
 #/usr/bin/env python3
 
 import matplotlib as mpl
-# mpl.use('Qt5Agg')
+mpl.use('Qt5Agg')
 
 import logging
 import numpy as num
@@ -19,7 +19,7 @@ from pyrocko import model
 from pyrocko import cake
 from pyrocko import pile
 from pyrocko import util
-from pyrocko.gui.util import PhaseMarker, Marker
+from pyrocko.gui.marker import PhaseMarker, Marker, associate_phases_to_events
 from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
@@ -33,28 +33,29 @@ logger = logging.getLogger('qopher')
 
 pjoin = os.path.join
 
-class SNRException(Exception):
-    pass
+
+def read_blacklist(fn):
+    if fn is None:
+        return []
+    names = []
+    with open(fn, 'r') as f:
+        for line in f.readlines():
+            names.append(line.split()[0])
+    return names
 
 
 def get_spectrum(ydata, deltat, config):
     ''' Return the spectrum on *ydata*, considering the *snr* stored in
     config
     '''
-    #isplit = int(len(ydata) / 2)
     a, f = mtspec(data=ydata, delta=deltat, number_of_tapers=config.ntapers,
         time_bandwidth=config.time_bandwidth, nfft=trace.nextpow2(len(ydata))*2)
-
-    #  plt.figure()
-    #  plt.plot(ydata[isplit:isplit*2])
-    #  plt.plot(ydata[0:isplit])
-    #  plt.show()
     return f, a
 
 
 def dump_qstats(qstats_dict, config):
     fn = pjoin(config.outdir, 'qstats.cpickle')
-    with open(fn, 'rb') as f:
+    with open(fn, 'wb') as f:
         pickle.dump(qstats_dict, f)
 
 
@@ -80,6 +81,7 @@ fail_counter['rmse'] = Counter('RMSE')
 fail_counter['IndexError'] = Counter('IndexError')
 fail_counter['rsquared'] = Counter('Low rsquared')
 fail_counter['slope'] = Counter('WARN: slope is NAN')
+fail_counter['frequency_content_low'] = Counter('Frequency Band')
 
 
 def run_qopher(config):
@@ -97,12 +99,17 @@ def run_qopher(config):
     velocity_model = cake.load_model(config.earthmodel)
     events_load = model.load_events(config.events)
     events = []
+    print(config.blacklist_events_fn)
+    blacklist_events = read_blacklist(config.blacklist_events_fn)
     for e in events_load:
         if config.tstart and e.time < util.stt(config.tstart):
             continue
         if config.tstop and e.time > util.tts(config.tstop):
             continue
         if config.mag_min and e.magnitude < config.mag_min:
+            continue
+        if blacklist_events and e.name in blacklist_events:
+            print('skipping blacklisted %s' % e.name)
             continue
 
         events.append(e)
@@ -119,6 +126,7 @@ def run_qopher(config):
     targets = [s2t(s, channel=config.channel) for s in stations]
     markers = Marker.load_markers(config.markers)
     markers = [pm for pm in markers if isinstance(pm, PhaseMarker)]
+
     data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
 
     reset_events(markers, events)
@@ -133,11 +141,11 @@ def run_qopher(config):
         config.want_phase, stations=stations, channel=config.channel)
 
     fn_cache = os.path.join(
-        config.fn_couples, 'coupler_' + filename_hash(
+        config.fn_couples, 'coupler_fix_' + filename_hash(
             sources, targets, config.earthmodel, phases))
     try:
         coupler = Coupler(Filtrate.load_pickle(fn_cache))
-    except (IOError, FileNotFoundError) as e:
+    except (IOError) as e:
         if not os.path.isdir(config.fn_couples):
             os.mkdir(config.fn_couples)
         coupler = Coupler()
@@ -156,6 +164,10 @@ def run_qopher(config):
         coupler.filtrate,
         max_mag_diff=config.mag_delta_max
     )
+
+    if len(candidates) == 0:
+        logger.warn('len(filtered) == 0!')
+        return
 
     from collections import defaultdict
     pwrs = defaultdict(list)
@@ -185,6 +197,7 @@ def run_qopher(config):
     cc = None
     no_waveforms = []
     ncandidates = len(candidates)
+    figname = None
 
     needs_rotation = False
     if config.channel in 'LQT':
@@ -302,10 +315,12 @@ def run_qopher(config):
         indx = num.intersect1d(
             num.where(f1>=config.fmin_lim),
             num.where(f1<=config.fmax_lim))
-
+        if len(indx) == 0:
+            fail_counter['frequency_content_low']()
+            continue
         f_selected = f1[indx]
-
         ratio_selected = ratio[indx]
+
         slope, intercept, r_value, p_value, std_err = stats.linregress(
             f_selected, ratio[indx])
         if config.rmse_max or config.save_stats:
@@ -320,21 +335,13 @@ def run_qopher(config):
                 fail_counter['rsquared'](r_value**2)
                 continue
 
-        if config.save_stats:
-            qstats['rsquared'] = r_value ** 2
-            qstats['rmse'] = RMSE
-            qstats['snr1'] = snr1
-            qstats['snr2'] = snr2
-            qstats['cc'] = cc
-            qstats['q'] = slope/travel_time_segment
-            all_stats.append(qstats)
-
         if num.isnan(slope):
             fail_counter['slope']()
             continue
 
         if config.plot:
-            fig, axs = plt.subplots(3,1)
+            figname = pjoin(dir_png, 'example_wave_spectra_%s.png' % icand)
+            fig, axs = plt.subplots(3, 1)
             axs[0].plot(tr1.get_xdata(), tr1.get_ydata())
             axs[0].plot(tr2.get_xdata(), tr2.get_ydata())
             axs[0].plot(tr1_noise.get_xdata(), tr1_noise.get_ydata(), color='grey')
@@ -342,8 +349,13 @@ def run_qopher(config):
             axs[0].set_ylabel('A [count]')
             axs[0].set_xlabel('Time [s]')
             axs[0].set_title('Channel: %s' % tr1.channel)
+
             if cc is not None:
-                axs[0].text(0., 0., 'cc = %s' % cc, transform=axs[0].transAxes)
+                axs[0].text(
+                    0., 0., 'q = %1.2f | cc = %1.2f | s1 = %s | s2 = %s' %
+                    (slope/travel_time_segment, cc, s1.name, s2.name),
+                    transform=axs[0].transAxes)
+
             axs[1].plot(f1, a1)
             axs[1].plot(f2, a2)
             axs[1].set_yscale('log')
@@ -357,19 +369,35 @@ def run_qopher(config):
 
             print("slope %s, rvalue %s, pvalue %s" % (slope, r_value, p_value))
 
-            fig.savefig(pjoin(dir_png, 'example_wave_spectra_%s.png' % icand))
-            #fig.close()
+            fig.savefig(figname)
+
+        if config.save_stats:
+            qstats['rsquared'] = r_value ** 2
+            qstats['rmse'] = RMSE
+            qstats['snr1'] = snr1
+            qstats['snr2'] = snr2
+            qstats['cc'] = cc
+            qstats['q'] = slope/travel_time_segment
+            qstats['figname'] = figname
+            all_stats.append(qstats)
 
         if slope>0:
             counter[t.codes][0] += 1
         else:
             counter[t.codes][1] += 1
         # qs.append(slope/ray.t[-1])
+
         qs.append(slope/travel_time_segment)
+        tr1.drop_data()
+        tr2.drop_data()
+        tr1_noise.drop_data()
+        tr2_noise.drop_data()
+        del(trs)
 
         print("slope %s" % slope)
 
-    dump_qstats(qstats, config)
+    if config.save_stats:
+        dump_qstats(all_stats, config)
 
     print(qs)
     status_str = ''
