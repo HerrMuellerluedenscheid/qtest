@@ -19,12 +19,14 @@ except ImportError:
 
 from .invert import Ray3D, Ray3DDiscretized
 from .vtk_graph import vtk_ray, render_actors, vtk_point
+from .util import evenize_path
 
 
 logger = logging.getLogger()
 
 cmap = plt.cm.bone_r
 pjoin = os.path.join
+
 
 class UniqueColor():
     def __init__(self, color_map=mpl.cm.jet, tracers=None):
@@ -156,6 +158,7 @@ class Coupler():
 
                 #actors.append(vtk_ray(points_of_segments, opacity=0.3))
                 for i_cmp_e, cmp_e in enumerate(sources):
+                    # print('y', ev.name, cmp_e.name)
                     ned_cmp = self.hookup(cmp_e)
                     #if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
                     #    failed += 1
@@ -165,6 +168,9 @@ class Coupler():
                     if aout:
                         td, pd, total_td, sgmts = aout
                         travel_time_segment = travel_times[0][:sgmts.shape[1]][-1]
+                        # print(travel_time_segment)
+                        # print(aout, travel_time_segment)
+                        # print(travel_time_segment)
                         # ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
                         #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
                         passed += 1
@@ -231,8 +237,6 @@ class Coupler():
                 continue
             else:
                 filtered.append(r)
-        if len(filtered)==0:
-            raise Exception('len(filtered) == 0!')
         print('%s of %s pairs passed' %(len(filtered), len(data)))
         return filtered
 
@@ -359,7 +363,8 @@ def array_center(stations):
 
 def project2enz(arrival, azimuth_deg):
     azimuth = azimuth_deg*cake.d2r
-    z, y, t = arrival.zxt_path_subdivided()
+    z, y, t = arrival.zxt_path_subdivided(points_per_straight=400)
+    # z, y, t = arrival.zxt_path_subdivided(points_per_straight=800)
     e = num.sin(azimuth) * y[0]
     n = num.cos(azimuth) * y[0]
     return n, e, z[0], t
