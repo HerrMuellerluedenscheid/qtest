@@ -14,6 +14,7 @@ operator_dict = {
     '>': 'gt',
     '<': 'lt',
     '>=': 'ge',
+    '==': 'eq',
     '<=': 'le',
 }
 
@@ -143,7 +144,7 @@ if __name__ == '__main__':
     parser.add_argument("--expected", help='Expected value', type=float,
                         default=0.)
     parser.add_argument("--sort-column", help='sort printed values by column N', type=int,
-                        default=0)
+                        default=None)
     parser.add_argument("--filter-column", help='filter column N where x: e.g. --filter-column="5:> 10" (note the whitespace!)',
         type=str, default=False)
     
@@ -157,7 +158,10 @@ if __name__ == '__main__':
     nsl = len(slopes)
     ncol = int(num.sqrt(nsl))
     if args.plot_hists:
-        if ncol != 1:
+        if ncol == 0:
+            fig_hists = plt.figure()
+            axs = [fig_hists.add_subplot(111)]
+        elif ncol != 1:
             ncol += 1
             nrow = int(ncol % nsl) + 1
             fig_hists, ax = plt.subplots(ncol, nrow, sharex=True, sharey=True, figsize=(10, 10))
@@ -184,7 +188,7 @@ if __name__ == '__main__':
         d = sl[idx]
         median = num.median(sl)
         if args.plot_hists:
-            ax = axs.next()
+            ax = axs.__next__()
             if args.acorr:
                 d, bin_edges = num.histogram(d, bins=nbins)
                 d = num.correlate(d, d, mode='full')
@@ -209,8 +213,8 @@ if __name__ == '__main__':
             for i in qc_dict.items():
                 txt += '%s: %1.4f\n' % i
 
-            # ax.text(1., 1., txt, color='grey', size=7, transform=ax.transAxes,
-            #         verticalalignment='top', horizontalalignment='right')
+            ax.text(1., 1., txt, color='grey', size=7, transform=ax.transAxes,
+                    verticalalignment='top', horizontalalignment='right')
 
             cleanup_axis(ax)
 
@@ -242,7 +246,8 @@ if __name__ == '__main__':
 #            return True
 #
     # print_sorted(num.array(all_data), filenames, args.sort_column, filter=column_filter)
-    print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
+    if args.sort_column:
+        print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
 
     if args.plot_hists:
         fig_hists.savefig(args.outfn + '.png')
