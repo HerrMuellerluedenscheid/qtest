@@ -1,7 +1,8 @@
 #/usr/bin/env python3
 
 import matplotlib as mpl
-mpl.use('Qt5Agg')
+# mpl.use('Qt5Agg')
+mpl.use('agg')
 
 import logging
 import numpy as num
@@ -24,14 +25,22 @@ from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
 from mtspec import mtspec
+from obspy.signal.filter import lowpass as scipy_lowpass
 
 from qtest import config
-from qtest.util import e2s, s2t, reset_events
-from qtest.distance_point2line import Coupler, Filtrate, filename_hash
+from qtest.util import e2s, s2t, reset_events 
+from qtest.distance_point2line import Coupler, Filtrate, filename_hash, fresnel_lambda
 
 logger = logging.getLogger('qopher')
 
 pjoin = os.path.join
+
+
+n_smooth = 10   # samples
+_smooth_taper = num.hanning(n_smooth)
+_taper_sum = _smooth_taper.sum()
+
+print("----Using %s points hanning smoothing for SNR in sepctral domain ----" % n_smooth)
 
 
 def read_blacklist(fn):
@@ -44,13 +53,33 @@ def read_blacklist(fn):
     return names
 
 
-def get_spectrum(ydata, deltat, config):
+def get_spectrum(ydata, deltat, config, psd=False, normalize=False, prefilter=True):
     ''' Return the spectrum on *ydata*, considering the *snr* stored in
     config
     '''
-    a, f = mtspec(data=ydata, delta=deltat, number_of_tapers=config.ntapers,
-        time_bandwidth=config.time_bandwidth, nfft=trace.nextpow2(len(ydata))*2)
-    return f, a
+
+    if prefilter:
+        ydata = scipy_lowpass(ydata, 4, 1./deltat, corners=4, zerophase=True)
+        ydata /= ydata.max()
+
+    if normalize:
+        ydata /= num.max(num.abs(ydata))
+
+    ntapers = config.ntapers or None
+    a, f = mtspec(data=ydata, delta=deltat,
+                  number_of_tapers=ntapers, #, (defaults to 2* bandwidth)
+                  time_bandwidth=config.time_bandwidth,
+                  nfft=trace.nextpow2(len(ydata)))
+    if psd:
+        return f, a
+    else:
+        # es braucht die Wurzel
+        # return f, num.sqrt(a) / num.sqrt(f)
+        return f, num.sqrt(a)
+        # m = len(a)
+        # a = a[:m // 2]
+        # f = f[:m // 2]
+        # return f, a
 
 
 def dump_qstats(qstats_dict, config):
@@ -72,19 +101,11 @@ class Counter:
         return "%s: %i" % (self.msg, self.count)
 
 
-fail_counter = {}
-fail_counter['no_onset'] = Counter('no onset')
-fail_counter['no_waveforms'] = Counter('no waveform data')
-fail_counter['low_snr'] = Counter('Low SNR')
-fail_counter['cc'] = Counter('Low CC')
-fail_counter['rmse'] = Counter('RMSE')
-fail_counter['IndexError'] = Counter('IndexError')
-fail_counter['rsquared'] = Counter('Low rsquared')
-fail_counter['slope'] = Counter('WARN: slope is NAN')
-fail_counter['frequency_content_low'] = Counter('Frequency Band')
+__top_level_cache = {}
 
 
 def run_qopher(config):
+   
     if not os.path.isdir(config.outdir):
         os.mkdir(config.outdir)
 
@@ -94,12 +115,23 @@ def run_qopher(config):
 
     config.dump(filename=pjoin(config.outdir, 'config.yaml'))
 
-    phases = [cake.PhaseDef(config.want_phase), cake.PhaseDef(config.want_phase.lower())]
+    fail_counter = {}
+    fail_counter['no_onset'] = Counter('no onset')
+    fail_counter['no_waveforms'] = Counter('no waveform data')
+    fail_counter['no_data'] = Counter('WARN: ydata is None')
+    fail_counter['low_snr'] = Counter('Low SNR')
+    fail_counter['cc'] = Counter('Low CC')
+    fail_counter['rmse'] = Counter('RMSE')
+    fail_counter['IndexError'] = Counter('IndexError')
+    fail_counter['rsquared'] = Counter('Low rsquared')
+    fail_counter['slope'] = Counter('WARN: slope is NAN')
+    fail_counter['bandwidth'] = Counter('WARN: Bandwidth to small')
+    fail_counter['frequency_content_low'] = Counter('Frequency Band')
 
-    velocity_model = cake.load_model(config.earthmodel)
+    phases = [cake.PhaseDef(config.want_phase.upper()), cake.PhaseDef(config.want_phase.lower())]
+
     events_load = model.load_events(config.events)
     events = []
-    print(config.blacklist_events_fn)
     blacklist_events = read_blacklist(config.blacklist_events_fn)
     for e in events_load:
         if config.tstart and e.time < util.stt(config.tstart):
@@ -127,9 +159,21 @@ def run_qopher(config):
     markers = Marker.load_markers(config.markers)
     markers = [pm for pm in markers if isinstance(pm, PhaseMarker)]
 
-    data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
+    velocity_model = cake.load_model(config.earthmodel)
+    velocity_fresnel = getattr(
+        velocity_model.material(
+            z=num.mean([s.depth for s in sources])),
+        {'P': 'vp', 'S': 'vs'}[config.want_phase.upper()])
+
+    data_pile = __top_level_cache.get((config.traces, config.file_format), False)
+    if not data_pile:
+        data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
+        __top_level_cache[(config.traces, config.file_format)] = data_pile
 
     reset_events(markers, events)
+
+    for m in markers:
+        m._phasename = m._phasename.upper()
 
     pie = PickPie(
         markers=markers,
@@ -138,13 +182,16 @@ def run_qopher(config):
         station2target=s2t)
 
     pie.process_markers(
-        config.want_phase, stations=stations, channel=config.channel)
+        config.want_phase.upper(), stations=stations, channel=config.channel)
 
     fn_cache = os.path.join(
         config.fn_couples, 'coupler_fix_' + filename_hash(
             sources, targets, config.earthmodel, phases))
     try:
-        coupler = Coupler(Filtrate.load_pickle(fn_cache))
+        coupler = __top_level_cache.get(fn_cache, False)
+        if not coupler:
+            coupler = Coupler(Filtrate.load_pickle(fn_cache))
+            __top_level_cache[fn_cache] = coupler
     except (IOError) as e:
         if not os.path.isdir(config.fn_couples):
             os.mkdir(config.fn_couples)
@@ -183,36 +230,42 @@ def run_qopher(config):
         avg_t = num.mean(pwrs['T'])
         for channel_id, vals in pwrs.items():
             print(channel_id, num.mean(num.array(vals)/avg_t))
-        
 
     counter = {}
     for t in targets:
         counter[t.codes] = [0, 0]
 
-    slope_positive = 0
-    slope_negative = 0
-
-    slopes = []
     qs = []
     cc = None
     no_waveforms = []
     ncandidates = len(candidates)
     figname = None
 
-    needs_rotation = False
-    if config.channel in 'LQT':
-        needs_rotation = True
+    needs_rotation = config.channel in 'LQT'
 
     all_stats = []
     for icand, candidate in enumerate(candidates):
         print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
         s1, s2, t, td, pd, totald, incidence, travel_time_segment = candidate
+
+        fmax_lim = config.fmax_lim
+        if config.use_fresnel:
+            fmax_lim = min(
+                fmax_lim,
+                velocity_fresnel/fresnel_lambda(totald, td, pd))
+
+        fmin_lim = config.fmin_lim
+        if fmax_lim - fmin_lim < config.min_bandwidth:
+            fail_counter['bandwidth']('%s - %s ' % (fmin_lim, fmax_lim))
+            continue
+
         if config.save_stats:
             qstats = {'event1': s1, 'event2': s2, 'target': t, 'td': td, 'pd': pd,
                      'totald': totald, 'incidence': incidence}
 
-        phase_keys = [(config.want_phase, (s, t.codes[:3])) for s in [s1, s2]]
+        phase_keys = [(config.want_phase.upper(), (s, t.codes[:3])) for s in [s1, s2]]
         if any([pk in no_waveforms for pk in phase_keys]):
+            fail_counter['no_waveforms']()
             continue
 
         if needs_rotation:
@@ -226,7 +279,7 @@ def run_qopher(config):
         trs = []
         for source in [s1, s2]:
             # s2 should be closer, hence it should be less affected by Q
-            phase_key = (config.want_phase, (source, t.codes[:3]))
+            phase_key = (config.want_phase.upper(), (source, t.codes[:3]))
             tmin = pie.t(*phase_key)
             if not tmin:
                 fail_counter['no_onset']()
@@ -260,14 +313,24 @@ def run_qopher(config):
                     trs_rot = trace.rotate_to_lqt(tr1, backazimuth, incidence, in_channels)
                     trs_rot_noise = trace.rotate_to_lqt(tr1_noise, backazimuth, incidence, in_channels)
                     tr1 = next((tr for tr in trs_rot if
-                                tr.channel==config.channel), None)
+                                tr.channel==config.channel), False)
                     tr1_noise = next((tr for tr in trs_rot_noise if
-                                      tr.channel==config.channel), None)
+                                      tr.channel==config.channel), False)
 
                     check_lqt(trs_rot, tr1)
                 else:
                     tr1 = tr1[0]
                     tr1_noise = tr1_noise[0]
+
+                if not tr1 or not tr1_noise:
+                    continue
+
+                if tr1.ydata is not None:
+                    tr1.ydata = tr1.ydata.astype(num.float)
+                    tr1_noise.ydata = tr1_noise.ydata.astype(num.float)
+                else:
+                    fail_counter['no_data']()
+                    continue
 
                 if not tr1 or not tr1_noise:
                     fail_counter['no_waveforms']()
@@ -286,8 +349,16 @@ def run_qopher(config):
 
         (tr1, tr1_noise), (tr2, tr2_noise) = trs
         if config.cc_min or config.save_stats:
+            _tr1 = tr1.copy()
+            _tr2 = tr2.copy()
+            _tr1.highpass(4, fmin_lim)
+            _tr2.highpass(4, fmin_lim)
+            _tr1.lowpass(4, fmax_lim)
+            _tr2.lowpass(4, fmax_lim)
+            _tr1.ydata /= _tr1.ydata.max()
+            _tr2.ydata /= _tr2.ydata.max()
             cc = trace.correlate(
-                tr1, tr2, mode='same', normalization='normal').max()[1]
+                _tr1, _tr2, mode='same').max()[1]
             if config.cc_min and cc < config.cc_min:
                 fail_counter['cc'](cc)
                 continue
@@ -299,25 +370,41 @@ def run_qopher(config):
         y1_noise = tr1_noise.ydata[:nsamples_want]
         y2_noise = tr2_noise.ydata[:nsamples_want]
 
-        f1, a1 = get_spectrum(y1, tr1.deltat, config)
-        f2, a2 = get_spectrum(y2, tr2.deltat, config)
+        f1, a1 = get_spectrum(y1, tr1.deltat, config, prefilter=False)
+        f2, a2 = get_spectrum(y2, tr2.deltat, config, prefilter=False)
         if config.snr or config.save_stats:
-            _, a1_noise = get_spectrum(y1_noise, tr1.deltat, config)
-            _, a2_noise = get_spectrum(y2_noise, tr2.deltat, config)
-            snr1 = min(a1/a1_noise)
-            snr2 = min(a2/a2_noise)
+            _, a1_noise = get_spectrum(y1_noise, tr1.deltat, config,
+                                       prefilter=False)
+            _, a2_noise = get_spectrum(y2_noise, tr2.deltat, config,
+                                       prefilter=False)
+            a1_smooth = num.convolve(a1/_taper_sum, _smooth_taper,
+                                     mode='same')
+            a2_smooth = num.convolve(a2/_taper_sum, _smooth_taper,
+                                     mode='same')
+            a1_noise = num.convolve(a1_noise/_taper_sum, _smooth_taper,
+                                     mode='same')
+            a2_noise = num.convolve(a2_noise/_taper_sum, _smooth_taper,
+                                     mode='same')
+
+            snr1 = min(a1_smooth/a1_noise)
+            snr2 = min(a2_smooth/a2_noise)
             if  snr1 < config.snr or snr2 < config.snr:
                 fail_counter['low_snr']()
                 continue
 
-        ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
+        f1, a1 = get_spectrum(y1, tr1.deltat, config, normalize=True, prefilter=False)
+        f2, a2 = get_spectrum(y2, tr2.deltat, config, normalize=True, prefilter=False)
+        ratio = num.log(a1 / a2)
+        # ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
 
         indx = num.intersect1d(
-            num.where(f1>=config.fmin_lim),
-            num.where(f1<=config.fmax_lim))
+            num.where(f1>=fmin_lim),
+            num.where(f1<=fmax_lim))
+
         if len(indx) == 0:
             fail_counter['frequency_content_low']()
             continue
+
         f_selected = f1[indx]
         ratio_selected = ratio[indx]
 
@@ -348,7 +435,8 @@ def run_qopher(config):
             axs[0].plot(tr2_noise.get_xdata(), tr2_noise.get_ydata(), color='grey')
             axs[0].set_ylabel('A [count]')
             axs[0].set_xlabel('Time [s]')
-            axs[0].set_title('Channel: %s' % tr1.channel)
+            stext = '%s %s' % (s1.name, s2.name)
+            axs[0].set_title('Channel: %s, %s' % (tr1.channel, stext))
 
             if cc is not None:
                 axs[0].text(
@@ -362,8 +450,8 @@ def run_qopher(config):
             axs[1].set_xlabel('f [Hz]')
 
             axs[2].plot(f_selected, ratio_selected)
-            axs[2].plot([config.fmin_lim, config.fmax_lim],
-                        [intercept+config.fmin_lim*slope, intercept + config.fmax_lim*slope])
+            axs[2].plot([fmin_lim, fmax_lim],
+                        [intercept+fmin_lim*slope, intercept + fmax_lim*slope])
 
             axs[2].set_title('log')
 
@@ -387,7 +475,9 @@ def run_qopher(config):
             counter[t.codes][1] += 1
         # qs.append(slope/ray.t[-1])
 
-        qs.append(slope/travel_time_segment)
+        Q = -num.pi * travel_time_segment / slope
+        qs.append(1./Q)
+        # qs.append(slope/travel_time_segment)
         tr1.drop_data()
         tr2.drop_data()
         tr1_noise.drop_data()
@@ -418,6 +508,7 @@ def run_qopher(config):
     ax.hist(qs, bins=41)
 
     fig.savefig(pjoin(config.outdir, 'slope_histogram.png'))
+    print('results saved at: %s ' % config.outdir)
 
 
 if __name__ == '__main__':
