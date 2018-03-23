@@ -128,7 +128,7 @@ if __name__ == '__main__':
     parser.add_argument("directories", help='directories', nargs='*')
     parser.add_argument("--recip", help='Use the inverse', action='store_true',
                         default=False)
-    parser.add_argument("--plot-hists",
+    parser.add_argument("--hists",
                         help='Make histogram plots for each result',
                         action='store_true', default=False)
     parser.add_argument("--xlim", help='set +- xlim', default=False, type=float)
@@ -147,6 +147,8 @@ if __name__ == '__main__':
                         default=None)
     parser.add_argument("--filter-column", help='filter column N where x: e.g. --filter-column="5:> 10" (note the whitespace!)',
         type=str, default=False)
+    parser.add_argument("--combine", help='combine results into a single plot', action='store_true',
+        default=False)
     
     args = parser.parse_args()
 
@@ -157,18 +159,24 @@ if __name__ == '__main__':
     parameters_dict = None
     nsl = len(slopes)
     ncol = int(num.sqrt(nsl))
-    if args.plot_hists:
-        if ncol == 0:
+    if args.hists:
+        if args.combine:
             fig_hists = plt.figure()
-            axs = [fig_hists.add_subplot(111)]
-        elif ncol != 1:
-            ncol += 1
-            nrow = int(ncol % nsl) + 1
-            fig_hists, ax = plt.subplots(ncol, nrow, sharex=True, sharey=True, figsize=(10, 10))
-            axs = [ai for aii in ax for ai in aii]
+            ax = fig_hists.add_subplot(111)
+            axs = [ax] * nsl
+
         else:
-            fig_hists = plt.figure()
-            axs = [fig_hists.add_subplot(111)]
+            if ncol == 0:
+                fig_hists = plt.figure()
+                axs = [fig_hists.add_subplot(111)]
+            elif ncol != 1:
+                ncol += 1
+                nrow = int(ncol % nsl) + 1
+                fig_hists, ax = plt.subplots(ncol, nrow, sharex=True, sharey=True, figsize=(10, 10))
+                axs = [ai for aii in ax for ai in aii]
+            else:
+                fig_hists = plt.figure()
+                axs = [fig_hists.add_subplot(111)]
 
         axs = iter(axs)
 
@@ -178,6 +186,7 @@ if __name__ == '__main__':
     filenames = []
 
     for islope, (f, fn_config, sl) in enumerate(slopes):
+
         filenames.append(f)
         if args.recip:
             sl = 1./sl
@@ -185,30 +194,38 @@ if __name__ == '__main__':
             idx = num.where(num.abs(sl) < args.xlim)
         else:
             idx = num.arange(len(sl))
+
         d = sl[idx]
-        median = num.median(sl)
-        if args.plot_hists:
+        if args.expected:
+            median = args.expected
+        else:
+            median = num.median(sl)
+
+        if args.hists:
             ax = axs.__next__()
             if args.acorr:
                 d, bin_edges = num.histogram(d, bins=nbins)
                 d = num.correlate(d, d, mode='full')
                 ax.plot(d, label=f)
             else:
-                ax.hist(d, bins=nbins, label=f)
-                ax.axvline(median, label='median', color='grey', alpha=0.5)
+                ax.hist(d, bins=nbins, label=f, normed=False, alpha=0.5)
+                ax.axvline(median, label='Model', color='grey', alpha=0.5)
                 ax.text(0., 1., f.split('/')[1][:3], color='black', transform=ax.transAxes, size=7,
                         rotation=90)
                 ax.text(median, 0., 'median: %1.4f' % median,
                         color='grey', size=7)
+                ax.set_xlabel('1/Q' if not args.recip else 'Q')
+            if args.combine:
+                ax.legend()
 
         qc_dict = {
             'variance' : num.var(d),
             'kurt' : stats.kurtosis(d),
             'weight' : len(d),
-            'median-deviation' : median - args.expected,
+            'median' : median,
         }
 
-        if args.plot_hists:
+        if args.hists and not args.combine:
             txt = ''
             for i in qc_dict.items():
                 txt += '%s: %1.4f\n' % i
@@ -249,7 +266,7 @@ if __name__ == '__main__':
     if args.sort_column:
         print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
 
-    if args.plot_hists:
+    if args.hists:
         fig_hists.savefig(args.outfn + '.png')
     
     ncol = len(qc_dict)
