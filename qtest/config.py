@@ -25,8 +25,8 @@ class QConfig(Object):
     mag_delta_max = Float.T(default=0.5)
     method = String.T(default='mtspec')
     fmax_lim = Float.T(default=85.)
-    fmin_lim = Float.T(default=40.)
-    fminrange = Float.T(default=30.)
+    fmin_lim = Float.T(default=30.)
+    min_bandwidth = Float.T(default=30.)
     snr = Float.T(default=5.)
     cc_min = Float.T(default=None, optional=True)
     mag_min = Float.T(default=1.)
@@ -41,6 +41,7 @@ class QConfig(Object):
     file_format = String.T(optional=True, default='guess')
     synthetic_config = SyntheticTestConfig.T(optional=True)
     fn_couples = String.T(optional=True, default='/tmp/couples')
+    use_fresnel = Bool.T(optional=True, default=True)
     plot = Bool.T(default=False)
     save_stats = Bool.T(default=False)
     noise_window_shift = Float.T(default=0.,
