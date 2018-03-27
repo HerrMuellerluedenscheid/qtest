@@ -15,11 +15,13 @@ except ImportError:
     # python3
     import pickle
 
+from collections import defaultdict
 from scipy import stats
 from pyrocko import model
 from pyrocko import cake
 from pyrocko import pile
 from pyrocko import util
+from pyrocko.gui import snuffler
 from pyrocko.gui.marker import PhaseMarker, Marker, associate_phases_to_events
 from pyrocko import trace
 import matplotlib.pyplot as plt
@@ -104,7 +106,7 @@ class Counter:
 __top_level_cache = {}
 
 
-def run_qopher(config):
+def run_qopher(config, snuffle=False):
    
     if not os.path.isdir(config.outdir):
         os.mkdir(config.outdir)
@@ -212,11 +214,15 @@ def run_qopher(config):
         max_mag_diff=config.mag_delta_max
     )
 
+    if snuffle:
+        snuffler.snuffle(data_pile, events=events, stations=stations,
+                       markers=markers)
+        sys.exit(0)
+
     if len(candidates) == 0:
         logger.warn('len(filtered) == 0!')
         return
 
-    from collections import defaultdict
     pwrs = defaultdict(list)
 
     def check_lqt(trs, trs_rotated):
@@ -248,7 +254,8 @@ def run_qopher(config):
         print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
         s1, s2, t, td, pd, totald, incidence, travel_time_segment = candidate
 
-        fmax_lim = config.fmax_lim
+        fmax_lim = config.fmax_lim * config.fmax_factor
+
         if config.use_fresnel:
             fmax_lim = min(
                 fmax_lim,
@@ -265,7 +272,8 @@ def run_qopher(config):
 
         phase_keys = [(config.want_phase.upper(), (s, t.codes[:3])) for s in [s1, s2]]
         if any([pk in no_waveforms for pk in phase_keys]):
-            fail_counter['no_waveforms']()
+            fail_counter['no_waveforms'](' %s %s ' % (util.tts(s1.time),
+                                                      util.tts(s2.time)))
             continue
 
         if needs_rotation:
@@ -282,7 +290,7 @@ def run_qopher(config):
             phase_key = (config.want_phase.upper(), (source, t.codes[:3]))
             tmin = pie.t(*phase_key)
             if not tmin:
-                fail_counter['no_onset']()
+                fail_counter['no_onset']("%s %s" % (util.tts(source.time), str(t.codes[:3])))
                 break
 
             if tmin < 10000.:
@@ -513,5 +521,11 @@ def run_qopher(config):
 
 if __name__ == '__main__':
     from qtest import config
-    c = config.QConfig.load(filename=sys.argv[1])
-    run_qopher(c)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('config')
+    parser.add_argument('--snuffle', action='store_true')
+    args = parser.parse_args()
+    c = config.QConfig.load(filename=args.config)
+    run_qopher(c, args.snuffle)
