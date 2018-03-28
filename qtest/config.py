@@ -26,6 +26,7 @@ class QConfig(Object):
     method = String.T(default='mtspec')
     fmax_lim = Float.T(default=85.)
     fmin_lim = Float.T(default=30.)
+    fmax_factor = Float.T(default=1.)
     min_bandwidth = Float.T(default=30.)
     snr = Float.T(default=5.)
     cc_min = Float.T(default=None, optional=True)
