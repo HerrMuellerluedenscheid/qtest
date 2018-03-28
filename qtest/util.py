@@ -1,6 +1,7 @@
 import numpy as num
 from pyrocko import moment_tensor
 from pyrocko.gf import Target
+from pyrocko.gui import marker
 from matplotlib import pyplot as plt
 from .brune import Brune
 from .rupture_size import radius as source_radius
@@ -29,11 +30,18 @@ def radius2fc(r, k=0.32, beta=3500):
     # Michalek
     # k = 0.32 (Madariaga, also in Michaleks paper)
     # beta = 3500 (Michaleks paper)
+
     fc = k*beta/r
     return fc
 
+
+def Ml_to_Mo(ml):
+    return num.exp(1.38*ml + 10.3)
+
+
 def fmin_by_magnitude(magnitude, stress=10., vr=3500):
-    Mo = moment_tensor.magnitude_to_moment(magnitude)
+    # Mo = moment_tensor.magnitude_to_moment(magnitude)
+    Mo = Ml_to_Mo(magnitude)
     #duration = M02tr(Mo, stress, vr)
     #print(duration)
     #return 1./duration
@@ -247,12 +255,21 @@ def e2linesource(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_t
 
 
 def reset_events(markers, events):
-    for e in events:
-        for m in markers:
-            if m.get_event_time() != e.time:
-                continue
-            m.set_event(e)
+    time_to_event = dict(zip([int(e.time) for e in events], events))
+    hash_to_event = dict(zip([e.get_hash() for e in events], events))
 
+    for m in markers:
+        e = hash_to_event.get(m.get_event_hash(), None)
+        if not e:
+            e = time_to_event.get(int(m.get_event_time()), None)
+        m.set_event(e)
+        # m.set_event(time_to_event.get(int(m.get_event_time()), None))
+
+# def reset_events(markers, events):
+#     time_to_event = dict(zip([int(e.time) for e in events], events))
+# 
+#     for m in markers:
+#         m.set_event(time_to_event.get(int(m.get_event_time()), None))
 
 def s2t(s, channel='Z', store_id=None): 
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation, 

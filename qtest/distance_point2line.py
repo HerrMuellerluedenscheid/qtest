@@ -19,7 +19,6 @@ except ImportError:
 
 from .invert import Ray3D, Ray3DDiscretized
 from .vtk_graph import vtk_ray, render_actors, vtk_point
-from .util import evenize_path
 
 
 logger = logging.getLogger()
