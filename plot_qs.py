@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 import matplotlib
 matplotlib.use('Agg')
 from qtest.config import QConfig
