@@ -268,7 +268,7 @@ if __name__ == '__main__':
         print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
 
     if args.hists:
-        fig_hists.savefig(args.outfn + '.png')
+        fig_hists.savefig(args.outfn)
     
     ncol = len(qc_dict)
     nrow = len(parameters_dict)
