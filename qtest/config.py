@@ -1,5 +1,6 @@
 from pyrocko.guts import Object, String, Float, Dict, Tuple, List, Int, Bool
-from pyrocko import model, util
+from pyrocko import model, util, pile
+import numpy as num
 
 
 class SyntheticTestConfig(Object):
@@ -45,6 +46,7 @@ class QConfig(Object):
     use_fresnel = Bool.T(optional=True, default=True)
     plot = Bool.T(default=False)
     save_stats = Bool.T(default=False)
+    adaptive = Bool.T(default=True)    # use adaptive weighting
     noise_window_shift = Float.T(default=0.,
         help='if zero, noise measure taken from window preceding phase window.'
                                  '[seconds]')
@@ -68,6 +70,17 @@ class QConfig(Object):
             if s.nsl() in wl:
                 f.append(s)
         return f
+
+    def get_pile(self):
+        return pile.make_pile(self.traces, fileformat=self.file_format)
+
+    def get_valid_frequency_idx(self, f, fmin=None, fmax=None):
+        fmin = fmin or self.fmin_lim
+        fmax = fmax or self.fmax_lim
+
+        return num.intersect1d(
+            num.where(f>=fmin),
+            num.where(f<=fmax))
 
     @classmethod
     def example(cls):
