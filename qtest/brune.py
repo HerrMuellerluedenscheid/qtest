@@ -20,7 +20,7 @@ def brune(t, sigma, r, beta, mu, z, a):
     return u1
 
 
-def brune_omega(w, sigma, r, beta, mu, z, a):
+def brune_omega(w, sigma, r, beta, mu, a):
     '''
     Principles of Seismology, 18.28
 
@@ -29,7 +29,6 @@ def brune_omega(w, sigma, r, beta, mu, z, a):
     :param beta: v_s
     :param mu: shear module
     :param r: distance
-    :param z: depth
     :param a: source radius
     '''
     b = 2.33*beta / a
