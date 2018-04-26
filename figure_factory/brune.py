@@ -1,5 +1,5 @@
 import numpy as num
-from rupture_size import radius as source_radius
+from qtest.rupture_size import radius as source_radius
 from pyrocko.guts import Object, Float
 
 def brune(t, sigma, r, beta, mu, z, a):
@@ -18,7 +18,7 @@ def brune(t, sigma, r, beta, mu, z, a):
     u1 = sigma*beta/mu * (t-r/beta) * num.exp(-b*(t-r/beta)) # principles of seismology
     return u1
 
-def brune_omega(w, sigma, r, beta, mu, z, a):
+def brune_omega(w, sigma, r, beta, mu, a):
     '''
     Principles of Seismology, 18.28
 
@@ -27,7 +27,6 @@ def brune_omega(w, sigma, r, beta, mu, z, a):
     :param beta: v_s
     :param mu: shear module
     :param r: distance
-    :param z: depth
     :param a: source radius
     '''
     b = 2.33*beta / a
@@ -96,7 +95,7 @@ def presentation_plot():
     for ii, a in enumerate(aa):
         fig = plt.figure(figsize=(3, 2.3))
         ax = fig.add_subplot(111)
-        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, z=z, a=a)
+        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, a=a)
         ax.plot(f, U, color=cmap((a-50)/450), label=a)
         ax.set_title('A$_%s$' % (ii))
         ax.set_xscale('log')
@@ -139,7 +138,7 @@ if __name__=='__main__':
     sm._A = []
     aa = num.linspace(50, 500, 100)
     for a in aa:
-        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, z=z, a=a)
+        U = brune_omega(w=f, sigma=sigma, r=r, beta=beta, mu=mu, a=a)
         ax.plot(f, U, color=cmap((a-50)/450), label=a)
         #Ufft = num.fft.rfft(U)
         #omegafft = num.fft.rfftfreq(n=len(U), d=1/sampling_rate)
