@@ -2,7 +2,11 @@ import numpy as num
 from pyrocko import moment_tensor
 from pyrocko.gf import Target
 from pyrocko.gui import marker
+from pyrocko import trace, pile
 from matplotlib import pyplot as plt
+from mtspec import mtspec
+# from obspy.signal.filter import lowpass as scipy_lowpass
+from qtest import config
 from .brune import Brune
 from .rupture_size import radius as source_radius
 from .sources import DCSourceWid, RectangularBrunesSource
@@ -11,6 +15,33 @@ try:
 except ImportError as e:
     print('CHANGE BRANCHES')
     raise e
+
+
+def get_spectrum(ydata, deltat, config, normalize=False, prefilter=False,
+                 adaptive=True):
+    ''' Return the spectrum on *ydata*, considering the *snr* stored in
+    config
+
+    :param normalize: divide trace ydata my max. Prevents MTSpec crashes if
+        values become very small
+    '''
+
+    if prefilter:
+        ydata = scipy_lowpass(ydata, 4, 1./deltat, corners=4, zerophase=True)
+
+    if normalize:
+        ydata = ydata / num.max(num.abs(ydata))
+
+    ntapers = config.ntapers or None
+    a, f = mtspec(data=ydata, delta=deltat,
+                  number_of_tapers=ntapers, #, (defaults to 2* bandwidth)
+                  time_bandwidth=config.time_bandwidth,
+                  adaptive=adaptive,
+                  nfft=trace.nextpow2(len(ydata)))
+
+    # es braucht die Wurzel! Never change that again! Ever!
+    # Results in a deviation of factor 2 otherwise.
+    return f, num.sqrt(a)
 
 
 def M02tr(Mo, stress, vr):
