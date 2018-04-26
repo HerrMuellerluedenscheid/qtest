@@ -49,8 +49,7 @@ def run_directivity(config, snuffle=False):
         for m in markers:
             trs = p.chopper(tmin=m.tmin+tstart,
                 tmax=m.tmax+tstop,
-                trace_selector=lambda x: m.match_nslc(x.nslc_id),
-                keep_current_files_open=True)
+                trace_selector=lambda x: m.match_nslc(x.nslc_id))
 
             tr = [tr for _tr in trs for tr in _tr if tr.channel == config.channel]
             if len(tr) == 0:
