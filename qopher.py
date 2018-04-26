@@ -27,7 +27,7 @@ from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
 from mtspec import mtspec
-from obspy.signal.filter import lowpass as scipy_lowpass
+# from obspy.signal.filter import lowpass as scipy_lowpass
 
 from qtest import config
 from qtest.util import e2s, s2t, reset_events 
@@ -61,6 +61,7 @@ def get_spectrum(ydata, deltat, config, psd=False, normalize=False, prefilter=Tr
     '''
 
     if prefilter:
+        raise Exception('This method is deprecated')
         ydata = scipy_lowpass(ydata, 4, 1./deltat, corners=4, zerophase=True)
         ydata /= ydata.max()
 
