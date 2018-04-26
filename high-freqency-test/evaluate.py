@@ -1,7 +1,8 @@
 from scipy.stats import linregress
 import numpy as num
 import matplotlib as mpl
-mpl.use('Qt5Agg')
+# mpl.use('Qt5Agg')
+mpl.use('agg')
 import matplotlib.pyplot as plt
 import mtspec
 from pyrocko.gui.marker import load_markers, PhaseMarker, associate_phases_to_events
@@ -11,8 +12,9 @@ from pyrocko import trace
 import pyrocko.orthodrome as ortho
 
 
-dir_data = '/data/vogtland2017/mseed'
-fn_markers = '/data/vogtland2017/picked.pf'
+dir_data = '/data/vogtland2017/kraslice'
+# dir_data = '/data/vogtland2017/mseed'
+fn_markers = '/data/vogtland2017/picked_new.pf'
 
 markers = load_markers(fn_markers)
 
@@ -54,10 +56,13 @@ results = []
 
 associate_phases_to_events(markers)
 
-for m in markers:
+nmarkers = len(markers)
+
+for imark, m in enumerate(markers):
     if not isinstance(m, PhaseMarker):
         continue
 
+    print('done %s/%s' % (imark+1, nmarkers))
     trace_selector = lambda tr: m.match_nsl(tr.nslc_id[:3])
 
     chopped, used_files = dpile.chop(
@@ -87,7 +92,7 @@ for m in markers:
         an = num.convolve(an/smooth_taper.sum(), smooth_taper, mode='same')
         snr = a / an
 
-        i = num.where(num.logical_and(snr <= 2, f > 50.))[0]
+        i = num.where(num.logical_and(snr <= 3, f > 50.))[0]
         f_cutoff = f[min(i)]
 
         # fig = plt.figure()
@@ -135,4 +140,6 @@ ax.set_ylabel('frequency [Hz]')
 ax.set_xlabel('magnitude')
 ax.spines['right'].set_visible(False)
 ax.spines['top'].set_visible(False)
-plt.show() 
+ax.set_title('SNR > 3 Thresholds')
+fig.savefig('hf-corner-frequency-test.png')
+# plt.show() 
