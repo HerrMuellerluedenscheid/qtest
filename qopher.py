@@ -28,10 +28,9 @@ from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
 from mtspec import mtspec
-from obspy.signal.filter import lowpass as scipy_lowpass
 
 from qtest import config
-from qtest.util import e2s, s2t, reset_events 
+from qtest.util import e2s, s2t, reset_events, get_spectrum
 from qtest.distance_point2line import Coupler, Filtrate, filename_hash, fresnel_lambda
 
 logger = logging.getLogger('qopher')
@@ -54,31 +53,6 @@ def read_blacklist(fn):
         for line in f.readlines():
             names.append(line.split()[0])
     return names
-
-
-def get_spectrum(ydata, deltat, config, normalize=False, prefilter=True):
-    ''' Return the spectrum on *ydata*, considering the *snr* stored in
-    config
-
-    :param normalize: divide trace ydata my max. Prevents MTSpec crashes if
-        values become very small
-    '''
-
-    if prefilter:
-        ydata = scipy_lowpass(ydata, 4, 1./deltat, corners=4, zerophase=True)
-
-    if normalize:
-        ydata = ydata / num.max(num.abs(ydata))
-
-    ntapers = config.ntapers or None
-    a, f = mtspec(data=ydata, delta=deltat,
-                  number_of_tapers=ntapers, #, (defaults to 2* bandwidth)
-                  time_bandwidth=config.time_bandwidth,
-                  nfft=trace.nextpow2(len(ydata)))
-
-    # es braucht die Wurzel! Never change that again! Ever!
-    # Results in a deviation of factor 2 otherwise.
-    return f, num.sqrt(a)
 
 
 def dump_qstats(qstats_dict, config):
@@ -123,7 +97,8 @@ def run_qopher(config, snuffle=False):
 
     data_pile = __top_level_cache.get((config.traces, config.file_format), False)
     if not data_pile:
-        data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
+        data_pile = config.get_pile()
+        # data_pile = pile.make_pile(config.traces, fileformat=config.file_format)
         __top_level_cache[(config.traces, config.file_format)] = data_pile
     
     ptmax = data_pile.tmax
@@ -149,8 +124,7 @@ def run_qopher(config, snuffle=False):
             continue
         if (config.tstart and e.time < util.stt(config.tstart)) or \
                 (config.tstop and e.time > util.tts(config.tstop)) or \
-                (config.mag_min and e.magnitude < config.mag_min) or \
-                e.name in blacklist_events:
+                (config.mag_min and e.magnitude < config.mag_min):
             continue
 
         events.append(e)
@@ -269,6 +243,10 @@ def run_qopher(config, snuffle=False):
             print('... %1.1f' % ((icand/float(ncandidates)) * 100.))
             s1, s2, trgt, td, pd, totald, incidence, travel_time_segment = candidate
 
+            if s1.name in blacklist_events or s2.name in blacklist_events:
+                print('---------------------------EVENT BLACKLISTED')
+                continue
+
             fmax_lim = config.fmax_lim * config.fmax_factor
 
             if config.use_fresnel:
@@ -307,6 +285,9 @@ def run_qopher(config, snuffle=False):
                 if not tmin:
                     fail_counter['no_onset']("%s %s" % (util.tts(source.time), str(trgt.codes[:3])))
                     break
+
+                if s2.depth > s1.depth:
+                    raise Exception('z2>z1')
 
                 if tmin < 10000.:
                     tmin = source.time + tmin
@@ -395,13 +376,13 @@ def run_qopher(config, snuffle=False):
             y1_noise = tr1_noise.ydata[:nsamples_want]
             y2_noise = tr2_noise.ydata[:nsamples_want]
 
-            f1, a1 = get_spectrum(y1, tr1.deltat, config, prefilter=False)
-            f2, a2 = get_spectrum(y2, tr2.deltat, config, prefilter=False)
+            f1, a1 = get_spectrum(y1, tr1.deltat, config, adaptive=config.adaptive)
+            f2, a2 = get_spectrum(y2, tr2.deltat, config, adaptive=config.adaptive)
             if config.snr is not None or config.save_stats:
                 f1_noise, a1_noise = get_spectrum(y1_noise, tr1.deltat, config,
-                                           prefilter=False)
+                    adaptive=config.adaptive)
                 f2_noise, a2_noise = get_spectrum(y2_noise, tr2.deltat, config,
-                                           prefilter=False)
+                    adaptive=config.adaptive)
                 a1_smooth = num.convolve(a1/_taper_sum, _smooth_taper,
                                          mode='same')
                 a2_smooth = num.convolve(a2/_taper_sum, _smooth_taper,
@@ -418,12 +399,13 @@ def run_qopher(config, snuffle=False):
                 snr2 = min(a2_smooth[idx2]/a2_noise[idx2])
                 if  snr1 < config.snr or snr2 < config.snr:
                     fail_counter['low_snr']()
-                    # continue
+                    continue
 
-            f1, a1 = get_spectrum(y1, tr1.deltat, config, normalize=False, prefilter=False)
-            f2, a2 = get_spectrum(y2, tr2.deltat, config, normalize=False, prefilter=False)
+            f1, a1 = get_spectrum(y1, tr1.deltat, config, normalize=False,
+                                  adaptive=config.adaptive)
+            f2, a2 = get_spectrum(y2, tr2.deltat, config, normalize=False,
+                                  adaptive=config.adaptive)
             ratio = num.log(a1 / a2)
-            # ratio = num.log(num.sqrt(a1)/num.sqrt(a2))
 
             indx = num.intersect1d(
                 num.where(f1>=fmin_lim),
