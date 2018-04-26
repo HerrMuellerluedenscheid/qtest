@@ -44,6 +44,24 @@ def get_spectrum(ydata, deltat, config, normalize=False, prefilter=False,
     return f, num.sqrt(a)
 
 
+def find_nearest_indx(array, value):
+    idx = (num.abs(array-value)).argmin()
+    return idx
+
+
+def make_marker_dict(markers, key_replacements=None):
+    key_replacements = key_replacements or {}
+    mdict = {}
+    for m in markers:
+        nslc = m.one_nslc()
+        key = key_replacements.get(nslc, nslc)
+        raw_m = mdict.get(key, [])
+        raw_m.append(m)
+        mdict[key] = raw_m
+
+    return mdict
+
+
 def M02tr(Mo, stress, vr):
     #stress=stress drop in MPa
     #vr=rupture velocity in m/s
