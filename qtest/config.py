@@ -28,6 +28,7 @@ class QConfig(Object):
     fmax_lim = Float.T(default=85.)
     fmin_lim = Float.T(default=30.)
     fmax_factor = Float.T(default=1.)
+    lat_min = Float.T(optional=True)
     min_bandwidth = Float.T(default=30.)
     snr = Float.T(default=None, optional=True)
     cc_min = Float.T(default=None, optional=True)
@@ -40,6 +41,7 @@ class QConfig(Object):
     whitelist = List.T(String.T(), optional=True)
     traversing_distance_min = Float.T(default=1000.)
     traversing_ratio = Float.T(default=2.)
+    depth_1_min = Float.T(optional=True)
     file_format = String.T(optional=True, default='guess')
     synthetic_config = SyntheticTestConfig.T(optional=True)
     fn_couples = String.T(optional=True, default='/tmp/couples')
@@ -47,6 +49,9 @@ class QConfig(Object):
     plot = Bool.T(default=False)
     save_stats = Bool.T(default=False)
     adaptive = Bool.T(default=True)    # use adaptive weighting
+    use_deconvolution = Bool.T(default=False)
+    max_t_separation = Float.T(optional=True, default=None)
+    want_polarity = Int.T(optional=True)
     noise_window_shift = Float.T(default=0.,
         help='if zero, noise measure taken from window preceding phase window.'
                                  '[seconds]')

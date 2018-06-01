@@ -16,6 +16,7 @@ try:
     import cPickle as pickle
 except ImportError:
     import pickle
+from qtest.util import make_marker_dict, find_nearest_indx, reset_events
 
 
 stations = load_stations('/data/meta/stations.pf')
@@ -34,6 +35,9 @@ else:
     fn_slope_ratios = None 
     slopes_ratios = {}
 
+want_phase = 'P'
+
+print('Processing phase %s' % want_phase)
 
 with open(fn, 'rb') as f:
     stats = pickle.load(f)
@@ -60,8 +64,6 @@ with open(fn, 'rb') as f:
         slope_ratio_1 = num.ndarray(n),
         slope_ratio_2 = num.ndarray(n),
 
-        #fignames = [],
-
         # waveform measures,
         snr_1 = num.ndarray(n),
         snr_2 = num.ndarray(n),
@@ -76,34 +78,30 @@ with open(fn, 'rb') as f:
         incidence = num.ndarray(n),
         cc = num.ndarray(n))
 
-    matrices.update({
-        'polarity_1': [],
-        'polarity_-1': [],
-        'polarity_None': []})
-
     q_by_event_involved = defaultdict(list)
+    events_by_name = {}
 
     for i, s in enumerate(stats):
         matrices['event_name_1'][i] = s['event1'].name
         matrices['event_name_2'][i] = s['event2'].name
         matrices['depth_1'][i] = s['event1'].depth
         matrices['depth_2'][i] = s['event2'].depth
-        matrices['lateral_distance'][i] = s['event1'].distance_to(s['event2'])
         matrices['magnitude_1'][i] = s['event1'].magnitude
         matrices['magnitude_2'][i] = s['event2'].magnitude
         matrices['origin_time_1'][i] = s['event1'].time
         matrices['origin_time_2'][i] = s['event2'].time
         matrices['northing_1'][i] = s['event1'].lat
         matrices['northing_2'][i] = s['event2'].lat
-        matrices['azimuth_e1_e2'][i] = ortho.azimuth(s['event1'], s['event2'])
         matrices['azimuth_NKC_1'][i] = ortho.azimuth(s['event1'], station_nkc)
         matrices['azimuth_NKC_2'][i] = ortho.azimuth(s['event2'], station_nkc)
-        matrices['azimuth_NKC_delta'][i] = abs((matrices['azimuth_NKC_1'][-1] - matrices['azimuth_NKC_2'][-1]))
         matrices['slope_ratio_1'][i] = num.log(slopes_ratios.get(s['event1'].name, 5.))
         matrices['slope_ratio_2'][i] = num.log(slopes_ratios.get(s['event2'].name, 5.))
         matrices['snr_1'][i] = s['snr1']
         matrices['snr_2'][i] = s['snr2']
 
+        matrices['lateral_distance'][i] = s['event1'].distance_to(s['event2'])
+        matrices['azimuth_e1_e2'][i] = ortho.azimuth(s['event1'], s['event2'])
+        matrices['azimuth_NKC_delta'][i] = abs((matrices['azimuth_NKC_1'][-1] - matrices['azimuth_NKC_2'][-1]))
         # add after next run!
         #fignames.append(s['figname'])
         matrices['pd'][i] = s['pd']
@@ -116,7 +114,9 @@ with open(fn, 'rb') as f:
 
         q_by_event_involved[s['event1'].name].append(s['q'])
         q_by_event_involved[s['event2'].name].append(s['q'])
-    
+        events_by_name[s['event1'].name] = s['event1'].pyrocko_event()
+        events_by_name[s['event2'].name] = s['event2'].pyrocko_event()
+
     e = []
     std_by_event = []
     qs_by_event = []
@@ -129,9 +129,70 @@ with open(fn, 'rb') as f:
         nqs.append(len(q))
 
     print('loading markers from NKC')
-    markers_nks = marker.PhaseMarker.load_markers('/home/marius/josef_dd/markers_with_polarities.pf')
-    emarkers = [marker.EventMarker(ie) for ie in e]
+    markers_nkc = marker.PhaseMarker.load_markers(
+        '/home/marius/josef_dd/markers_with_polarities.pf')
 
+    markers_nkc = [m for m in markers_nkc if m.one_nslc()[1] == 'NKC' and
+                   m.get_phasename().upper() == want_phase]
+    # key_replacements = {'*.NKCN.*.*': '*.NKC.*.*'})
+    # emarkers = [marker.EventMarker(ie) for ie in e]
+    reset_events(markers_nkc, events_by_name.values())
+    marker_by_event_name = {}
+    for m in markers_nkc:
+        ev = m.get_event()
+        if ev:
+            marker_by_event_name[ev.name] = m
+        else:
+            print(ev)
+
+    polarity_matrices = {
+        'polarity_1_1': [],
+        'polarity_-1_-1': [],
+        'polarity_diff': [],
+        'polarity_None': [],
+        # 'polarity_2_1': [],
+        # 'polarity_2_-1': [],
+        # 'polarity_2_diff': [],
+        # 'polarity_2_None': [],
+    }
+
+    polarities_counter = {}
+    def _count_polarities(p):
+        if p:
+            cnt = polarities_counter.get(str(p), 0)
+            cnt += 1
+            polarities_counter[p] = cnt
+
+    n_skipped = 0
+    for i, s in enumerate(stats):
+        e1 = s['event1'].name
+        e2 = s['event2'].name
+        m1 = marker_by_event_name.get(e1, None)
+        m2 = marker_by_event_name.get(e2, None)
+        if None in [m1, m2]:
+            n_skipped += 1
+            continue
+
+        p1 = m1.get_polarity()
+        p2 = m2.get_polarity()
+
+        _count_polarities(p1)
+        _count_polarities(p2)
+        if p1 == p2 and p1 == 1:
+            matrix_key = 'polarity_1_1'
+        elif p1 == p2 and p1 == -1:
+            matrix_key = 'polarity_-1_-1'
+        elif p1 == 1 and p2 == -1:
+            matrix_key = 'polarity_1_-1'
+        elif p1 ==-1 and p2 == 1:
+            matrix_key = 'polarity_-1_1'
+        else:
+            print(e1, p1 , ' | ', e2, p2)
+            matrix_key = 'polarity_None'
+
+        pmtrx = polarity_matrices.get(matrix_key, [])
+        pmtrx.append(s['q'])
+        polarity_matrices[matrix_key] = pmtrx
 
     ii = num.argsort(qs_by_event)
 
@@ -139,6 +200,10 @@ with open(fn, 'rb') as f:
         print('event: %s  Nmeasures: %s  median: %s  std: %s  slope_ratio: %s' % (
             e[i], nqs[i], qs_by_event[i], std_by_event[i],
             slopes_ratios.get(e[i], None)))
+
+    polarities_counter['skipped'] = n_skipped
+    for args in polarities_counter.items():
+        print('%s polarities: %s' % args)
 
     keys = sorted(list(matrices.keys()))
     combinations = []
@@ -168,6 +233,16 @@ with open(fn, 'rb') as f:
             ax.scatter(matrices[ki], matrices[kj], s=point_size, color='black', alpha=0.2)
 
     else:
+
+        def polyfit(ax, x, y):
+            try:
+                isorted = num.argsort(y)
+                fit = num.polyfit(y[isorted], x[isorted], 20.)
+                p = num.poly1d(fit)
+                ax.plot(p(y[isorted]),y[isorted])
+            except ValueError as e:
+                pass
+
         keys.remove('qs')
         n_keys = len(keys)
         nrows = int(num.sqrt(n_keys))
@@ -177,18 +252,33 @@ with open(fn, 'rb') as f:
         for ikey, k in enumerate(keys):
             #ax = axs[int(nrows/(ikey+1))][ikey % ncolumns]
             ax = axs[ikey][0]
-            ax.scatter(1./matrices['qs'], matrices[k], s=point_size, color='black', alpha=0.2)
+            x, y = 1./matrices['qs'], matrices[k]
+            ax.scatter(x, y, s=point_size, color='black', alpha=0.2)
+
             ax.set_xlim(-200., 200)
             ax.set_ylabel(k)
             ax.axvline(0.0, color='black', alpha=0.15)
+            polyfit(ax, x, y)
   
             ax = axs[ikey][1]
-            ax.scatter(matrices['qs'], matrices[k], s=point_size, color='black', alpha=0.2)
+            x = 1./ x
+            ax.scatter(x, y, s=point_size, color='black', alpha=0.2)
+            polyfit(ax, x, y)
             ax.axvline(0.0, color='black', alpha=0.15)
             ax.set_xlim(-0.3, 0.3)
-
 
     fig.subplots_adjust(#hspace=0.02, wspace=0.02, top=0.95,
                         left=0.15, bottom=0.02, right=0.95)
     fig.savefig('covariances.png', dpi=260)
-    # plt.show()
+
+    n_keys = len(polarity_matrices.keys())
+    fig_polarity, axs = plt.subplots(n_keys, 1, figsize=(7, 3*n_keys))
+    for i, (key, pm) in enumerate(polarity_matrices.items()):
+        ax = axs[i]
+        ax.hist(pm, bins=25)
+        print(num.median(pm))
+        ax.axvline(num.median(pm), color='b')
+        ax.axvline(num.mean(pm), color='r')
+        ax.set_title(key)
+    fig.tight_layout()
+    fig_polarity.savefig('polarities.png', dpi=260)

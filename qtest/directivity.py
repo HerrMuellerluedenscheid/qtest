@@ -21,9 +21,10 @@ def run_directivity(config, snuffle=False):
     p = config.get_pile()
 
     tstop = 0.2
-    tstart = -0.2
+    tstart = -0.1
 
-    want_stations = ['SKC', 'LBC']
+    #            reference, target
+    want_stations = ['SKC', 'NKC']
 
     for m in markers_load:
         if not p.is_relevant(m.tmin, m.tmax):
@@ -31,6 +32,8 @@ def run_directivity(config, snuffle=False):
         if not m.one_nslc()[1] in want_stations:
             continue
         e = m.get_event()
+        if not e:
+            continue
         if e.magnitude < config.mag_min:
             continue
         mlist = markers_by_event.get(e, [])
@@ -70,8 +73,7 @@ def run_directivity(config, snuffle=False):
         except KeyError as e:
             continue
 
-
-    with open('differential_fall_offs.pickl', 'wb') as f:
+    with open('differential_fall_offs_%s_%s.pickl' % tuple(want_stations), 'wb') as f:
         pickle.dump(slope_ratios_by_events, f, protocol=2)
     print(slope_ratios_by_events)
 

@@ -27,7 +27,7 @@ from pyrocko.gui.marker import PhaseMarker, Marker, associate_phases_to_events
 from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
-from mtspec import mtspec
+import mtspec
 
 from qtest import config
 from qtest.util import e2s, s2t, reset_events, get_spectrum
@@ -55,8 +55,8 @@ def read_blacklist(fn):
     return names
 
 
-def dump_qstats(qstats_dict, config):
-    fn = pjoin(config.outdir, 'qstats.cpickle')
+def dump_qstats(qstats_dict, outdir):
+    fn = pjoin(outdir, 'qstats.cpickle')
     with open(fn, 'wb') as f:
         pickle.dump(qstats_dict, f)
 
@@ -202,7 +202,7 @@ def run_qopher(config, snuffle=False):
             config.traversing_ratio,
             config.traversing_distance_min,
             coupler.filtrate,
-            max_mag_diff=config.mag_delta_max
+            max_mag_diff=config.mag_delta_max,
         )
 
         if len(candidates) == 0:
@@ -249,6 +249,16 @@ def run_qopher(config, snuffle=False):
 
             fmax_lim = config.fmax_lim * config.fmax_factor
 
+            if config.max_t_separation is not None:
+                if abs(s1.time-s2.time) > config.max_t_separation:
+                    print('---------------------------temporal speparation')
+                    continue
+
+            if config.lat_min is not None:
+                if s1.lat < config.lat_min or s2.lat < config.lat_min:
+                    print('---------------------------Latmin')
+                    continue
+
             if config.use_fresnel:
                 fmax_lim = min(
                     fmax_lim,
@@ -288,6 +298,9 @@ def run_qopher(config, snuffle=False):
 
                 if s2.depth > s1.depth:
                     raise Exception('z2>z1')
+
+                if config.depth_1_min and s1.depth<config.depth_1_min:
+                    continue
 
                 if tmin < 10000.:
                     tmin = source.time + tmin
@@ -364,7 +377,7 @@ def run_qopher(config, snuffle=False):
                 _tr1.ydata /= _tr1.ydata.max()
                 _tr2.ydata /= _tr2.ydata.max()
                 cc = trace.correlate(
-                    _tr1, _tr2, mode='same', normalization='normal').max()[1]
+                    _tr1, _tr2, mode='same', normalization=None).max()[1]
                 if config.cc_min and cc < config.cc_min:
                     fail_counter['cc'](cc)
                     continue
@@ -400,12 +413,41 @@ def run_qopher(config, snuffle=False):
                 if  snr1 < config.snr or snr2 < config.snr:
                     fail_counter['low_snr']()
                     continue
-
             f1, a1 = get_spectrum(y1, tr1.deltat, config, normalize=False,
                                   adaptive=config.adaptive)
             f2, a2 = get_spectrum(y2, tr2.deltat, config, normalize=False,
                                   adaptive=config.adaptive)
             ratio = num.log(a1 / a2)
+
+            if config.use_deconvolution:
+                # ratio_trace = trace.deconvolve(tr1, tr2, waterlevel=0.05)
+                # f1, ratio = get_spectrum(ratio_trace.get_ydata(), ratio_trace.deltat,
+                #                     config, normalize=False, adaptive=config.adaptive)
+                # ratio = num.log(ratio)
+                # print(tr1.data_len(), tr2.data_len())
+                y1 = tr1.get_ydata()
+                y2 = tr2.get_ydata()
+                n = min(tr1.data_len(), tr2.data_len())
+                decon = mtspec.mt_deconvolve(y1[:n], y2[:n],
+                                            tr1.deltat,
+                                             time_bandwidth=config.time_bandwidth,
+                                             # number_of_tapers=config.ntapers,
+                                             number_of_tapers=5,
+                                             weights='constant', demean=False)
+                y_decon = decon['deconvolved']
+                a, f = mtspec.mtspec(y_decon, tr1.deltat,
+                              time_bandwidth=config.time_bandwidth)
+                              #number_of_tapers=config.nta
+                # If that works, a1 should have been num.sqrt(a1) and same for
+                # a2...!
+                ratio = num.log(a)
+                # ratio = num.log(decon['spectral_ratio'])
+                # print(decon.keys())
+
+                f1 = decon['frequencies']
+                # print(ratio)
+                # ratio = num.log(ratio)
+                # print(ratio)
 
             indx = num.intersect1d(
                 num.where(f1>=fmin_lim),
@@ -506,9 +548,9 @@ def run_qopher(config, snuffle=False):
             del(trs)
 
             print("slope %s" % slope)
-
+        outdir = pjoin(config.outdir, station.station)
         if config.save_stats:
-            dump_qstats(all_stats, config)
+            dump_qstats(all_stats, outdir)
 
         print(qs)
         status_str = ''
@@ -525,14 +567,14 @@ def run_qopher(config, snuffle=False):
             # f.write('Npositive = %s\n' % len(qs))
 
         plot_lqt() 
-        num.savetxt(pjoin(config.outdir, station.station, 'qs_inv.txt'), num.array(qs).T)
+        num.savetxt(pjoin(outdir, 'qs_inv.txt'), num.array(qs).T)
 
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        ax.hist(qs, bins=41)
+        ax.hist(qs, bins=121)
 
-        fig.savefig(pjoin(config.outdir, station.station, 'slope_histogram.png'))
-        print('results saved at: %s ' % pjoin(config.outdir, station.station))
+        fig.savefig(pjoin(outdir, 'slope_histogram.png'))
+        print('results saved at: %s ' % outdir)
 
 
 if __name__ == '__main__':
