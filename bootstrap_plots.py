@@ -32,7 +32,7 @@ if len(sys.argv)>2:
     with open(sys.argv[2], 'rb') as f:
         slopes_ratios = pickle.load(f, encoding='latin1')
 else:
-    fn_slope_ratios = None 
+    fn_slope_ratios = None
     slopes_ratios = {}
 
 want_phase = 'P'
