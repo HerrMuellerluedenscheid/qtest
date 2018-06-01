@@ -31,7 +31,7 @@ if len(sys.argv)>2:
     with open(sys.argv[2], 'rb') as f:
         slopes_ratios = pickle.load(f, encoding='latin1')
 else:
-    fn_slope_ratios = None 
+    fn_slope_ratios = None
     slopes_ratios = {}
 
 
@@ -116,7 +116,7 @@ with open(fn, 'rb') as f:
 
         q_by_event_involved[s['event1'].name].append(s['q'])
         q_by_event_involved[s['event2'].name].append(s['q'])
-    
+
     e = []
     std_by_event = []
     qs_by_event = []

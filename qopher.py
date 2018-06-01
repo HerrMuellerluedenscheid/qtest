@@ -27,7 +27,6 @@ from pyrocko.gui.marker import PhaseMarker, Marker, associate_phases_to_events
 from pyrocko import trace
 import matplotlib.pyplot as plt
 from autogain.autogain import PickPie
-from mtspec import mtspec
 
 from qtest import config
 from qtest.util import e2s, s2t, reset_events, get_spectrum
