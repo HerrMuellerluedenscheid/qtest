@@ -9,6 +9,7 @@ import numpy as num
 import sys
 from collections import defaultdict
 from pyrocko.gf import *
+from pyrocko.pile import make_pile
 from pyrocko.model.station import load_stations
 from pyrocko.model.event import Event
 import matplotlib.pyplot as plt
@@ -17,7 +18,7 @@ try:
 except ImportError:
     import pickle
 from qtest.util import make_marker_dict, find_nearest_indx, reset_events
-
+pjoin = sys.path.join
 
 stations = load_stations('/data/meta/stations.pf')
 station_by_nsl = {}
@@ -26,7 +27,7 @@ for s in stations:
 station_nkc = station_by_nsl[('', 'NKC','')]
 
 point_size = 0.3
-fn = sys.argv[1]
+# fn = sys.argv[1]
 
 if len(sys.argv)>2:
     with open(sys.argv[2], 'rb') as f:
@@ -39,7 +40,16 @@ want_phase = 'P'
 
 print('Processing phase %s' % want_phase)
 
-with open(fn, 'rb') as f:
+if len(config.whitelist) == 1:
+    station = config.whitelist[0]
+else:
+    print('config.whitelist contains more than one station. need to specify') 
+    sys.exit()
+
+fn_stats = pjoin(config.outdir, station)
+data_pile = config.get_pile()
+
+with open(fn_stats, 'rb') as f:
     stats = pickle.load(f)
     all_combinations = False
     n = len(stats)

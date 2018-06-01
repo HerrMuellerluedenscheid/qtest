@@ -32,16 +32,15 @@ def cc_all(by_markers, hp, lp, tpad):
     n_markers = len(markers)
     correlations = []
     for i_m, a_m in enumerate(markers):
-        for j_m, b_m in enumerate(markers[i_m:]):
+        for j_m, b_m in enumerate(markers[i_m+1:]):
             a_tr = by_markers[a_m].copy()
             b_tr = by_markers[b_m].copy()
             do_demean(a_tr)
             do_demean(b_tr)
             filt(a_tr)
             filt(b_tr)
-            # a_tr.chop(a_tr.tmin+tpad, a_tr.tmax-tpad)
-            # b_tr.chop(b_tr.tmin+tpad, b_tr.tmax-tpad)
-            t, v = trace.correlate(a_tr, b_tr, normalization='normal', mode='full').max()
+            # t, v = trace.correlate(a_tr, b_tr, normalization='normal', mode='full').max()
+            t, v = trace.correlate(a_tr, b_tr, normalization='normal', mode='valid').max()
             correlations.append((marker_to_name(a_m), marker_to_name(b_m), v))
             # correlations.append((marker_to_name(b_m), marker_to_name(a_m), v))
     return correlations
@@ -83,7 +82,8 @@ class Scale():
 
 
 
-def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5, section_div=None):
+def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
+                 overlay=False, section_div=None):
 
     if section_div:
         def get_color(e):
@@ -114,7 +114,8 @@ def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
             ydata = tr.get_ydata()
             ydata -= num.mean(ydata[0:10])
             ydata *= vrange * yscale_factor
-            ydata = getattr(event, section_plot_key) + ydata
+            if not overlay:
+                ydata = getattr(event, section_plot_key) + ydata
             ax.axvline(tr.tmin+tpad)
             ax.axvline(tr.tmax-tpad)
             ax.plot(
@@ -125,21 +126,20 @@ def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
 
 
 if __name__ == '__main__':
-    data_path = '/media/usb/vogtland/gse2'
+    # data_path = '/media/usb/vogtland/gse2'
+    data_path = '/data/webnet/gse2/2008Oct'
     fn_markers = '/home/marius/josef_dd/hypodd_markers_josef.pf'
     fn_events = '/home/marius/josef_dd/events_from_sebastian.pf'
     fn_correlations = 'correlations'
     fn_index_mapping = 'index_mapping.txt'
-    create_indices = True # If True: replace event names in output with indices
-                            # suited for seiscloud
-    # want_station = 'NKC'
-    want_station = 'LBC'
+    want_station = 'NKC'
+    # want_station = 'LBC'
     want_channel = 'SHZ'
     normalize = True
     want_phase = 'P'
     section_plot_key = 'lat'
     section_div = 50.212
-    magmin = 1.4
+    magmin = 1.5
     demean = True
     yscale_factor = 0.3
     twin_min = -0.01
@@ -200,8 +200,10 @@ if __name__ == '__main__':
                 for tr in trs:
                     yield m, tr
 
+    used_events = []
     for m, tr in iter_marker_with_snippets():
         event = m.get_event()
+        used_events.append(m.get_event())
         batch = get_batch(event)
         tr.shift(-m.tmin)
         if demean:
@@ -210,6 +212,7 @@ if __name__ == '__main__':
             do_normalize(tr)
         batch.append(tr)
         by_markers[m] = tr
+    dump_events(used_events, fn_index_mapping.rsplit('.', 1)[0] + '_%s_use_events.pf'% want_station)
 
     fig, axs = plt.subplots(len(filters), len(batches))
     for ifilt, (hp, lp) in enumerate(filters):
@@ -226,15 +229,16 @@ if __name__ == '__main__':
 
     correlations = {}
     for filt in filters:
-        with open(fn_correlations + '_%s_%s-%s.txt' % (filt + (want_station, )), 'w') as f:
-            for (ma, mb, value) in cc_all(by_markers, *filt, tpad=tpad):
-                if create_indices:
-                    indexa = eventname_to_index[ma]
-                    indexb = eventname_to_index[mb]
-                else:
+        with open(fn_correlations + '_seiscloud_%s_%s-%s.txt' %
+                  (filt + (want_station, )), 'w') as f_seiscloud:
+            with open(fn_correlations + '_%s_%s-%s.txt' % (filt + (want_station, )), 'w') as f:
+                for (ma, mb, value) in cc_all(by_markers, *filt, tpad=tpad):
                     indexa = ma
                     indexb = mb
-                f.write('%s %s %1.4f\n' % (indexa, indexb, 1.-value))
+                    f.write('%s %s %1.4f\n' % (indexa, indexb, 1.-value))
+                    indexa = eventname_to_index[ma]
+                    indexb = eventname_to_index[mb]
+                    f_seiscloud.write('%s %s %1.4f\n' % (indexa, indexb, 1.-value))
 
     with open(fn_index_mapping, 'w') as f:
         for vals in eventname_to_index.items():
@@ -249,7 +253,12 @@ if __name__ == '__main__':
         dump_events(catalog, fn_index_mapping.rsplit('.', 1)[0] + '_%s_cat.pf'% want_station)
 
     section_plot(by_markers, section_plot_key, filters, tpad=tpad, section_div=section_div, yscale_factor=yscale_factor)
+    section_plot(by_markers, section_plot_key, filters, tpad=tpad,
+                 section_div=section_div, yscale_factor=yscale_factor,
+                 overlay=True)
     section_plot(by_markers, section_plot_key, filters, tpad=tpad, yscale_factor=yscale_factor)
+    section_plot(by_markers, section_plot_key, filters, tpad=tpad,
+                 yscale_factor=yscale_factor, overlay=True)
 
     plt.show()
 

@@ -1,13 +1,15 @@
-import numpy as num
-from scipy.interpolate import griddata
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib import animation
+from .invert import Ray3D, Ray3DDiscretized
+from .vtk_graph import vtk_ray, render_actors, vtk_point
 from pyrocko import cake, gf, model
 from pyrocko import orthodrome as ortho
 from pyrocko import util
 from pyrocko.gf import Target, meta, SourceWithMagnitude
 from pyrocko.guts import List, Object, String, Float
+import numpy as num
+from scipy.interpolate import griddata
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+from matplotlib import animation
 import logging
 import sys
 import os
@@ -17,8 +19,6 @@ try:
 except ImportError:
     import pickle
 
-from .invert import Ray3D, Ray3DDiscretized
-from .vtk_graph import vtk_ray, render_actors, vtk_point
 
 
 logger = logging.getLogger()
