@@ -377,7 +377,8 @@ def run_qopher(config, snuffle=False):
                 _tr1.ydata /= _tr1.ydata.max()
                 _tr2.ydata /= _tr2.ydata.max()
                 cc = trace.correlate(
-                    _tr1, _tr2, mode='same', normalization=None).max()[1]
+                    _tr1, _tr2, mode=config.cc_mode,
+                    normalization=config.cc_normalization).max()[1]
                 if config.cc_min and cc < config.cc_min:
                     fail_counter['cc'](cc)
                     continue

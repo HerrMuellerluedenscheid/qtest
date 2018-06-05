@@ -32,6 +32,8 @@ class QConfig(Object):
     min_bandwidth = Float.T(default=30.)
     snr = Float.T(default=None, optional=True)
     cc_min = Float.T(default=None, optional=True)
+    cc_mode = String.T(default='same')
+    cc_normalization = String.T(optional=True)
     mag_min = Float.T(default=1.)
     mag_max =  Float.T(default=3.)
     time_bandwidth = Float.T(default=5.)
