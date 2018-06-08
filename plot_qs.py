@@ -203,7 +203,13 @@ if __name__ == '__main__':
             median = num.median(sl)
 
         if args.hists:
-            ax = axs.__next__()
+            try:
+                ax = axs.__next__()
+            except StopIteration as e:
+                print(e)
+                print('try --combine')
+                sys.exit()
+
             if args.acorr:
                 d, bin_edges = num.histogram(d, bins=nbins)
                 d = num.correlate(d, d, mode='full')
