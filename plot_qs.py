@@ -1,9 +1,11 @@
 #! /usr/bin/env python3
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+# plt.style.use("ggplot")
+
 from qtest.config import QConfig
 import os
-import matplotlib.pyplot as plt
 import numpy as num
 import scipy.stats as stats
 import sys
@@ -78,7 +80,7 @@ def is_number(s):
 def cleanup_axis(ax):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
+    # ax.spines['left'].set_visible(False)
 
 
 def plothist(slopes, recip=False, ax=None):
@@ -90,7 +92,7 @@ def plothist(slopes, recip=False, ax=None):
         idx = num.where(num.abs(slopes) < 200)
     else:
         idx = num.arange(len(slopes))
-    ax.hist(slopes[idx], bins=201)
+    ax.hist(slopes[idx], bins=201, normed=False)
     ax.axvline(num.median(slopes), label='median', color='grey')
     ax.text(num.median(slopes), 0., 'median: %1.4f' % num.median(slopes),
             color='grey')
@@ -188,10 +190,12 @@ if __name__ == '__main__':
 
     for islope, (f, fn_config, sl) in enumerate(slopes):
 
+        label = f.split('/')[0]
         filenames.append(f)
         if args.recip:
             sl = 1./sl
-        if args.xlim:
+        # if args.xlim:
+        if False:
             idx = num.where(num.abs(sl) < args.xlim)
         else:
             idx = num.arange(len(sl))
@@ -213,17 +217,19 @@ if __name__ == '__main__':
             if args.acorr:
                 d, bin_edges = num.histogram(d, bins=nbins)
                 d = num.correlate(d, d, mode='full')
-                ax.plot(d, label=f)
+                ax.plot(d, label=label)
             else:
-                ax.hist(d, bins=nbins, label=f, normed=False, alpha=0.5)
+                ax.hist(d, bins=nbins, label=label, normed=False, alpha=0.5)
                 ax.axvline(median, label='Model', color='grey', alpha=0.5)
-                ax.text(0., 1., f.split('/')[1][:3], color='black', transform=ax.transAxes, size=7,
-                        rotation=90)
-                ax.text(median, 0., 'median: %1.4f' % median,
-                        color='grey', size=7)
+                # ax.text(median, 0., 'median: %1.4f' % median,
+                #         color='grey', size=7)
                 ax.set_xlabel('1/Q' if not args.recip else 'Q')
             if args.combine:
                 ax.legend()
+
+            if args.xlim:
+                ax.set_xlim([-args.xlim, args.xlim])
+            cleanup_axis(ax)
 
         qc_dict = {
             'variance' : num.var(d),
