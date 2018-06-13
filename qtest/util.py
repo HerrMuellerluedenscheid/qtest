@@ -391,3 +391,14 @@ class Magnitude2Window():
         ax.set_ylabel('time')
 
 
+
+def subtract(a, b):
+	assert a.deltat == b.deltat
+	ioff = int(round((b.tmin-a.tmin)/a.deltat))
+	ibeg = max(0, ioff)
+	iend = min(a.data_len(), ioff+b.data_len())
+	cy = a.ydata[ibeg:iend] - other.ydata[ibeg-ioff:iend-ioff]
+	c = a.copy(data=False)
+	c.set_ydata(cy)
+	return c
+

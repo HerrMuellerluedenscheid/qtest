@@ -18,6 +18,7 @@ try:
 except ImportError:
     import pickle
 from qtest.util import make_marker_dict, find_nearest_indx, reset_events
+from qtest.util import subtract
 pjoin = sys.path.join
 
 stations = load_stations('/data/meta/stations.pf')
@@ -155,15 +156,13 @@ with open(fn_stats, 'rb') as f:
         else:
             print(ev)
 
+    # ---------------------------------------------
+    # polarity analysis
     polarity_matrices = {
         'polarity_1_1': [],
         'polarity_-1_-1': [],
         'polarity_diff': [],
         'polarity_None': [],
-        # 'polarity_2_1': [],
-        # 'polarity_2_-1': [],
-        # 'polarity_2_diff': [],
-        # 'polarity_2_None': [],
     }
 
     polarities_counter = {}
@@ -206,6 +205,31 @@ with open(fn_stats, 'rb') as f:
 
     ii = num.argsort(qs_by_event)
 
+    # ---------------------------------------------
+    # differential P phase waveforms ==========================
+    paired_waveforms = []
+    for i, s in enumerate(stats):
+        e1 = s['event1'].name
+        e2 = s['event2'].name
+        chunk = []
+        for e in [e1, e2]:
+            data_pile.chop()
+            m = marker_by_event_name.get(e, None)
+            if m is None:
+                print('No marker for event %s' % e)
+                sys.exit()
+
+            trs = data_pile.chop(lambda tr: tr.station==m.one_nslc()[1] and
+                                 tr.channel==config.channel)
+            if not len(trs) == 1:
+                print('Length of traces != 1')
+                sys.exit()
+
+            trs[-1].shift(-m.tmin)
+            chunk.extend(trs)
+        paired_waveforms.append((s['q']. s['cc'], subtract(*chunk)))
+
+    # TODO: plot
     for i in ii:
         print('event: %s  Nmeasures: %s  median: %s  std: %s  slope_ratio: %s' % (
             e[i], nqs[i], qs_by_event[i], std_by_event[i],
