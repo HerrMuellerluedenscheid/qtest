@@ -145,13 +145,15 @@ if __name__ == '__main__':
     parser.add_argument("--result-filename", help='default: qs_inv.txt',
                         default='qs_inv.txt')
     parser.add_argument("--expected", help='Expected value', type=float,
-                        default=0.)
+                        default=0)
     parser.add_argument("--sort-column", help='sort printed values by column N', type=int,
                         default=None)
     parser.add_argument("--filter-column", help='filter column N where x: e.g. --filter-column="5:> 10" (note the whitespace!)',
         type=str, default=False)
     parser.add_argument("--combine", help='combine results into a single plot', action='store_true',
         default=False)
+    parser.add_argument("--alpha", help='histogram opacity', default=0.5,
+                        type=float)
     
     args = parser.parse_args()
 
@@ -203,8 +205,11 @@ if __name__ == '__main__':
         d = sl[idx]
         if args.expected:
             median = args.expected
+            vline_label = 'Model'
         else:
             median = num.median(sl)
+            print('median: %s, Nevents: %s' % (median, len(d)))
+            vline_label = 'Median'
 
         if args.hists:
             try:
@@ -219,8 +224,10 @@ if __name__ == '__main__':
                 d = num.correlate(d, d, mode='full')
                 ax.plot(d, label=label)
             else:
-                ax.hist(d, bins=nbins, label=label, normed=False, alpha=0.5)
-                ax.axvline(median, label='Model', color='grey', alpha=0.5)
+                ax.hist(d, bins=nbins, label=label, normed=False,
+                        alpha=args.alpha)
+                ax.axvline(median, label=vline_label, color='grey',
+                           alpha=args.alpha)
                 # ax.text(median, 0., 'median: %1.4f' % median,
                 #         color='grey', size=7)
                 ax.set_xlabel('1/Q' if not args.recip else 'Q')

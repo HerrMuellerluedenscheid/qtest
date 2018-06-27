@@ -10,11 +10,25 @@ from qtest import config
 from .brune import Brune
 from .rupture_size import radius as source_radius
 from .sources import DCSourceWid, RectangularBrunesSource
+import logging
+
 try:
     from pyrocko.gf import BoxcarSTF, TriangularSTF, HalfSinusoidSTF#, GaussSTF
 except ImportError as e:
     print('CHANGE BRANCHES')
     raise e
+
+logger = logging.getLogger('qtest.util')
+
+
+def read_blacklist(fn):
+    if fn is None:
+        return []
+    names = []
+    with open(fn, 'r') as f:
+        for line in f.readlines():
+            names.append(line.split()[0])
+    return names
 
 
 def get_spectrum(ydata, deltat, config, normalize=False, prefilter=False,
@@ -91,70 +105,13 @@ def Ml_to_Mo(ml):
 def fmin_by_magnitude(magnitude, stress=10., vr=3500):
     # Mo = moment_tensor.magnitude_to_moment(magnitude)
     Mo = Ml_to_Mo(magnitude)
-    #duration = M02tr(Mo, stress, vr)
-    #print(duration)
-    #return 1./duration
-    # 
+
     # Source parameters of the swarm earthquakes in West Bohemia/Vogtland,
     # Michalek:
     r = 0.155 * Mo** 0.206
     return radius2fc(r)
     #print Mo, r
     #return r
-
-
-#def fit_log(onset1, onset2, mtspec_args, taper_args=None, fminmax=(-999, 999),
-#            estimator="linregress"):
-#    tp1, tr1 = onset1
-#    tp2, tr2 = onset2
-#    if taper_args:
-#        tr1.taper(**taper_args)
-#        tr2.taper(**taper_args)
-#    mtspec_args.update({'data': tr1.ydata, 'nfft': trace.nextpow2(len(tr1.ydata))})
-#    a1, f1 = mtspec(**mtspec_args)
-#
-#    mtspec_args.update({'data': tr2.ydata, 'nfft': trace.nextpow2(len(tr2.ydata))})
-#    a2, f2 = mtspec(**mtspec_args)
-#
-#    # psd => ampspecs
-#    #ratio = num.sqrt(a1/a2)
-#    #ratio = num.sqrt(a1)/num.sqrt(a2)
-#    ratio = a1/a2
-#    assert all(f1==f2)
-#    ratio = num.log(ratio)
-#    indx = num.where(num.logical_and(f1>fminmax[0], f1<fminmax[1]))
-#    f1 = f1[indx]
-#    ratio = ratio[indx]
-#    if estimator == "linregress":
-#        return stats.linregress(f1, ratio)
-#    elif estimator == "ransac":
-#        import ransac
-#        n = 10.   # minimum number of data values required to fit the model
-#        k = 100.    # maximum number of iterations allowed in the algorithm
-#        t = 10.   # threshold value for determining when a data point fits a model
-#        d = 10.      # the number of close data values required to assert that a
-#                  # model fits well to data
-#        all_data = num.vstack((f1, ratio))
-#        n_inputs = 1
-#        n_outputs = 1
-#        input_columns = range(n_inputs) # the first columns of the array
-#        output_columns = [n_inputs+i for i in range(n_outputs)] # the
-#
-#        model = ransac.LinearLeastSquaresModel(input_columns, output_columns,
-#                                               debug=False)
-#        return ransac.ransac(all_data.T, model, n, k, t, d), None, None, None, None
-#
-#    elif estimator == "theil-sen":
-#        estimator = TheilSenRegressor(random_state=42)
-#        estimator.fit(f1[:, num.newaxis], ratio)
-#        xline = num.array([0., 200.])
-#        ypred = estimator.predict(xline.reshape(2,1))
-#        interc = ypred[0]
-#        slope = (ypred[1]-ypred[0])/(xline[1]-xline[0])
-#        return slope, interc, None, None, None
-#    else:
-#        raise Exception("unknown method")
-
 
 
 def window(freqs, fc, b):                                                                                                                     
@@ -213,11 +170,6 @@ def e2extendeds(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_ty
        strike=float(s), dip=float(d), rake=float(r), magnitude=float(mag), brunes=brunes,
         velocity=float(velocity),
        nucleation_x=float(nucleation_x), nucleation_y=float(nucleation_y), stf=stf)
-    #return RectangularSource(
-    #   lat=e.lat, lon=e.lon, depth=e.depth, north_shift=north_shift,
-    #   east_shift=east_shift, time=e.time, width=float(a[0]), length=float(a[0]),
-    #   strike=mt.strike1, dip=mt.dip1, rake=mt.rake1, magnitude=mag,
-    #   nucleation_x=nucleation_x, nucleation_y=nucleation_y, stf=stf)
 
 
 def e2circulars(e, north_shift=0., east_shift=0., nucleation_radius=None, stf_type=None):
@@ -314,11 +266,6 @@ def reset_events(markers, events):
         m.set_event(e)
         # m.set_event(time_to_event.get(int(m.get_event_time()), None))
 
-# def reset_events(markers, events):
-#     time_to_event = dict(zip([int(e.time) for e in events], events))
-# 
-#     for m in markers:
-#         m.set_event(time_to_event.get(int(m.get_event_time()), None))
 
 def s2t(s, channel='Z', store_id=None): 
     return Target(lat=s.lat, lon=s.lon, depth=s.depth, elevation=s.elevation, 
@@ -390,6 +337,18 @@ class Magnitude2Window():
         ax.set_xlabel('magnitude')
         ax.set_ylabel('time')
 
+
+class Counter:
+    def __init__(self, msg):
+        self.msg = msg
+        self.count = 0
+
+    def __call__(self, info=''):
+        self.count += 1
+        logger.info("%s %s (%i)" % (self.msg, info, self.count))
+
+    def __str__(self):
+        return "%s: %i" % (self.msg, self.count)
 
 
 def subtract(a, b):

@@ -1,4 +1,6 @@
 import numpy as num
+import matplotlib
+matplotlib.use('PS')
 import matplotlib.pyplot as plt
 from scipy import signal
 
@@ -58,8 +60,8 @@ def cc_batch(trs, hp, lp):
             ydata_b = tr_b.ydata
             tr_b = tr_b.copy()
 
-            tr_b.highpass(4, hp)
-            tr_b.lowpass(4, lp)
+            # tr_b.highpass(4, hp)
+            # tr_b.lowpass(4, lp)
             t, v = trace.correlate(
                 tr_a, tr_b, mode='full', normalization='normal').max()
             ccs.append(v)
@@ -83,7 +85,7 @@ class Scale():
 
 
 def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
-                 overlay=False, section_div=None):
+                 overlay=False, section_div=None, outfile=None):
 
     if section_div:
         def get_color(e):
@@ -108,8 +110,8 @@ def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
             event = marker.get_event()
             ax.set_title('%s | %s - %s Hz' % (tr.station, hp, lp))
             tr = tr.copy()
-            tr.highpass(4, hp)
-            tr.lowpass(4, lp)
+            # tr.highpass(4, hp)
+            # tr.lowpass(4, lp)
             # tr.chop(tr.tmin+tpad, tr.tmax-tpad)
             ydata = tr.get_ydata()
             ydata -= num.mean(ydata[0:10])
@@ -123,6 +125,9 @@ def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
                 ydata,
                 color=get_color(event),
                 alpha=0.08)
+
+    if outfile is not None:
+        fig.savefig(outfile)
 
 
 if __name__ == '__main__':
@@ -139,11 +144,12 @@ if __name__ == '__main__':
     want_phase = 'P'
     section_plot_key = 'lat'
     section_div = 50.212
-    magmin = 1.5
+    magmin = 1.4
     demean = True
     yscale_factor = 0.3
     twin_min = -0.01
     twin_max = 0.2
+    domain = 'spectral'
 
     tpad = 0.5  # padding on both sides for filtering
 
@@ -210,6 +216,7 @@ if __name__ == '__main__':
             tr.ydata = tr.ydata - num.mean(tr.ydata)
         if normalize:
             do_normalize(tr)
+
         batch.append(tr)
         by_markers[m] = tr
     dump_events(used_events, fn_index_mapping.rsplit('.', 1)[0] + '_%s_use_events.pf'% want_station)
@@ -221,11 +228,20 @@ if __name__ == '__main__':
             ax.set_title('%s | %s - %s Hz' % (want_station, hp, lp))
             for tr in batch:
                 tr = tr.copy()
-                tr.highpass(4, hp)
-                tr.lowpass(4, lp)
-                tr.chop(tr.tmin+tpad, tr.tmax-tpad)
-                ax.plot(tr.get_xdata(), tr.get_ydata(), color='black', alpha=0.1)
+                if domain == 'spectral':
+                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    a, f = mtspec.mtspec(tr.ydata, delta=tr.deltat, time_bandwidth=4)
+                    xdata = f
+                    ydata = num.log(a)
+                else:
+                    tr.highpass(4, hp)
+                    tr.lowpass(4, lp)
+                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    xdata = tr.get_xdata()
+                    ydata = tr.get_ydata
+                ax.plot(xdata, ydata, color='black', alpha=0.1)
             ax.text(0., 0., '%1.2f' % cc_batch(batch, hp, lp), transform=ax.transAxes)
+    fig.savefig('sections_%s.png' % want_station)
 
     correlations = {}
     for filt in filters:
@@ -252,13 +268,20 @@ if __name__ == '__main__':
 
         dump_events(catalog, fn_index_mapping.rsplit('.', 1)[0] + '_%s_cat.pf'% want_station)
 
-    section_plot(by_markers, section_plot_key, filters, tpad=tpad, section_div=section_div, yscale_factor=yscale_factor)
+    outfn = fn_correlations + 'a.png'
     section_plot(by_markers, section_plot_key, filters, tpad=tpad,
                  section_div=section_div, yscale_factor=yscale_factor,
-                 overlay=True)
-    section_plot(by_markers, section_plot_key, filters, tpad=tpad, yscale_factor=yscale_factor)
+                 outfile=outfn)
+    outfn = fn_correlations + 'b.png'
     section_plot(by_markers, section_plot_key, filters, tpad=tpad,
-                 yscale_factor=yscale_factor, overlay=True)
+                 section_div=section_div, yscale_factor=yscale_factor,
+                 overlay=True, outfile=outfn)
+    outfn = fn_correlations + 'c.png'
+    section_plot(by_markers, section_plot_key, filters, tpad=tpad,
+                 yscale_factor=yscale_factor, outfile=outfn)
+    outfn = fn_correlations + 'd.png'
+    section_plot(by_markers, section_plot_key, filters, tpad=tpad,
+                 yscale_factor=yscale_factor, overlay=True, outfile=outfn)
 
     plt.show()
 

@@ -30,7 +30,7 @@ import mtspec
 from autogain.autogain import PickPie
 
 from qtest import config
-from qtest.util import e2s, s2t, reset_events, get_spectrum
+from qtest.util import e2s, s2t, reset_events, get_spectrum, read_blacklist, Counter
 from qtest.distance_point2line import Coupler, Filtrate, filename_hash, fresnel_lambda
 
 logger = logging.getLogger('qopher')
@@ -45,33 +45,10 @@ _taper_sum = _smooth_taper.sum()
 print("----Using %s points hanning smoothing for SNR in sepctral domain ----" % n_smooth)
 
 
-def read_blacklist(fn):
-    if fn is None:
-        return []
-    names = []
-    with open(fn, 'r') as f:
-        for line in f.readlines():
-            names.append(line.split()[0])
-    return names
-
-
 def dump_qstats(qstats_dict, outdir):
     fn = pjoin(outdir, 'qstats.cpickle')
     with open(fn, 'wb') as f:
         pickle.dump(qstats_dict, f)
-
-
-class Counter:
-    def __init__(self, msg):
-        self.msg = msg
-        self.count = 0
-
-    def __call__(self, info=''):
-        self.count += 1
-        logger.info("%s %s (%i)" % (self.msg, info, self.count))
-
-    def __str__(self):
-        return "%s: %i" % (self.msg, self.count)
 
 
 __top_level_cache = {}
@@ -109,10 +86,11 @@ def run_qopher(config, snuffle=False):
     phases = [
         # cake.PhaseDef(config.want_phase.upper()),
         cake.PhaseDef(config.want_phase.lower())]
-    
+
     events_load = model.load_events(config.events)
     markers_load = PhaseMarker.load_markers(config.markers)
     reset_events(markers_load, events_load)
+
     stations = model.load_stations(config.stations)
     stations = [s for s in stations if '.'.join(s.nsl()) in whitelist]
 
@@ -134,7 +112,7 @@ def run_qopher(config, snuffle=False):
 
     if len(stations) == 0:
         raise Exception('No stations excepted by whitelist')
-    velocity_model = cake.load_model(config.earthmodel)
+    velocity_model = config.load_velocity_model()
     velocity_fresnel = getattr(
         velocity_model.material(
             z=num.mean([s.depth for s in sources])),
@@ -159,11 +137,6 @@ def run_qopher(config, snuffle=False):
         # etimes = set([m.get_event().time for m in markers])
 
         targets = [s2t(station)]
-
-        if snuffle:
-            snuffler.snuffle(data_pile, events=events, stations=stations,
-                           markers=markers)
-            sys.exit(0)
 
         pie = PickPie(
             markers=markers,
@@ -195,7 +168,6 @@ def run_qopher(config, snuffle=False):
                 velocity_model,
                 phases,
                 check_relevance_by=data_pile,
-                ignore_segments=False,
                 fn_cache=fn_cache)
 
         candidates = coupler.filter_pairs(
@@ -213,8 +185,6 @@ def run_qopher(config, snuffle=False):
 
         def check_lqt(trs, trs_rotated):
             '''Helper routine to verify power ratios.'''
-            def pwr(_tr_):
-                return num.sqrt(num.sum(tr.ydata**2))
             for tr in trs:
                 pwrs[tr.channel].append(num.sqrt(num.sum(tr.ydata**2)))
 
