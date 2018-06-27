@@ -3,6 +3,11 @@
 import matplotlib
 
 matplotlib.use('Agg')
+font = {'family' : 'normal',
+        'size'   : 9}
+
+matplotlib.rc('font', **font)
+
 import os
 from pyrocko import orthodrome as ortho
 from pyrocko.gui import marker
@@ -23,17 +28,34 @@ from qtest.util import subtract
 from qtest.config import QConfig
 pjoin = os.path.join
 
+size_a6 = (1.5*4.13, 1.5*2.91)  # Not really a6
+
 
 def make_northing_combination_plot(matrices, fn_out=None):
-    fig = plt.figure()
+    fig = plt.figure(figsize=size_a6)
     ax = fig.add_subplot(111)
-    ax.scatter(
-        matrices['northing_1'],
-        matrices['northing_2'],
-        c=matrices['qs'])
 
+    cmap = matplotlib.cm.bwr
+
+    qs = matrices['qs']
+    vlim = num.abs(qs).max()
+    s = ax.scatter(
+        matrices['northing_1'], matrices['northing_2'],
+        c=qs, s=1., cmap=cmap, vmin=-vlim, vmax=vlim)
+
+    # ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%0.5f'))
+    xmin, xmax = matrices['northing_1'].min(), matrices['northing_1'].max()
+    ax.set_xlim((xmin, xmax))
+    ax.set_ylim((matrices['northing_2'].min(), matrices['northing_2'].max()))
+    # ax.set_xticks(num.arange(xmin, xmax+)
+    ax.set_xlabel('Latitude, 1st event')
+    ax.set_ylabel('Latitude, 2nd event')
+    fig.subplots_adjust(left=0.15, right=0.99)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    fig.colorbar(s, label='1/Q')
     if fn_out is not None:
-        fig.savefig(fn_out)
+        fig.savefig(fn_out, dpi=320)
 
 
 if __name__ == '__main__':
@@ -176,7 +198,7 @@ if __name__ == '__main__':
             if ev:
                 marker_by_event_name[ev.name] = m
             else:
-                print(ev)
+                print('No event set for marker', m)
 
         # ---------------------------------------------
         # polarity analysis
@@ -229,27 +251,26 @@ if __name__ == '__main__':
 
         # ---------------------------------------------
         # differential P phase waveforms ==========================
-        paired_waveforms = []
-        for i, s in enumerate(stats):
-            e1 = s['event1'].name
-            e2 = s['event2'].name
-            chunk = []
-            for e in [e1, e2]:
-                data_pile.chop()
-                m = marker_by_event_name.get(e, None)
-                if m is None:
-                    print('No marker for event %s' % e)
-                    sys.exit()
+        # paired_waveforms = []
+        # for i, s in enumerate(stats):
+        #     e1 = s['event1'].name
+        #     e2 = s['event2'].name
+        #     chunk = []
+        #     for e in [e1, e2]:
+        #         m = marker_by_event_name.get(e, None)
+        #         if m is None:
+        #             print('No marker for event %s' % e)
+        #             sys.exit()
 
-                trs = data_pile.chop(lambda tr: tr.station==m.one_nslc()[1] and
-                                     tr.channel==config.channel)
-                if not len(trs) == 1:
-                    print('Length of traces != 1')
-                    sys.exit()
+        #         trs = data_pile.chop(lambda tr: tr.station==m.one_nslc()[1] and
+        #                              tr.channel==config.channel)
+        #         if not len(trs) == 1:
+        #             print('Length of traces != 1')
+        #             sys.exit()
 
-                trs[-1].shift(-m.tmin)
-                chunk.extend(trs)
-            paired_waveforms.append((s['q']. s['cc'], subtract(*chunk)))
+        #         trs[-1].shift(-m.tmin)
+        #         chunk.extend(trs)
+        #     paired_waveforms.append((s['q']. s['cc'], subtract(*chunk)))
 
         # TODO: plot
         for i in ii:
@@ -339,4 +360,5 @@ if __name__ == '__main__':
         fig.tight_layout()
         fig_polarity.savefig('polarities.png', dpi=260)
 
-        make_northing_combination_plot(matrices, fn_out='northings_vs_q.png')
+        make_northing_combination_plot(
+            matrices, fn_out='northings_vs_q_%s.png' % station)
