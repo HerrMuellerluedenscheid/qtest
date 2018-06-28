@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-# encoding=utf8  
+# encoding=utf8
+
+import os
 import matplotlib
 
 matplotlib.use('Agg')
@@ -12,13 +14,24 @@ from pyrocko.gf import *
 from pyrocko.pile import make_pile
 from pyrocko.model.station import load_stations
 from pyrocko.model.event import Event
+from qtest import config
+import argparse
 import matplotlib.pyplot as plt
 try:
     import cPickle as pickle
 except ImportError:
     import pickle
 from qtest.util import make_marker_dict, find_nearest_indx, reset_events
-pjoin = sys.path.join
+
+pjoin = os.path.join
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--config')
+parser.add_argument('--slopes')
+parser.add_argument('--stats')
+
+args = parser.parse_args()
 
 stations = load_stations('/data/meta/stations.pf')
 station_by_nsl = {}
@@ -29,25 +42,21 @@ station_nkc = station_by_nsl[('', 'NKC','')]
 point_size = 0.3
 # fn = sys.argv[1]
 
-if len(sys.argv)>2:
-    with open(sys.argv[2], 'rb') as f:
+if args.slopes is not None:
+    with open(args.slopes, 'rb') as f:
         slopes_ratios = pickle.load(f, encoding='latin1')
 else:
-    fn_slope_ratios = None
     slopes_ratios = {}
 
 want_phase = 'P'
 
 print('Processing phase %s' % want_phase)
 
-if len(config.whitelist) == 1:
-    station = config.whitelist[0]
-else:
-    print('config.whitelist contains more than one station. need to specify') 
-    sys.exit()
+if args.config is not None:
+    config = config.QConfig.load(filename=args.config)
 
-fn_stats = pjoin(config.outdir, station)
-data_pile = config.get_pile()
+#fn_stats = pjoin(config.outdir, station)
+fn_stats = args.stats
 
 with open(fn_stats, 'rb') as f:
     stats = pickle.load(f)
@@ -206,10 +215,11 @@ with open(fn_stats, 'rb') as f:
 
     ii = num.argsort(qs_by_event)
 
-    for i in ii:
-        print('event: %s  Nmeasures: %s  median: %s  std: %s  slope_ratio: %s' % (
-            e[i], nqs[i], qs_by_event[i], std_by_event[i],
-            slopes_ratios.get(e[i], None)))
+    if slopes_ratios:
+        for i in ii:
+            print('event: %s  Nmeasures: %s  median: %s  std: %s  slope_ratio: %s' % (
+                e[i], nqs[i], qs_by_event[i], std_by_event[i],
+                slopes_ratios.get(e[i], None)))
 
     polarities_counter['skipped'] = n_skipped
     for args in polarities_counter.items():
