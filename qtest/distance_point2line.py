@@ -4,7 +4,7 @@ from pyrocko import cake, gf, model
 from pyrocko import orthodrome as ortho
 from pyrocko import util
 from pyrocko.gf import Target, meta, SourceWithMagnitude
-from pyrocko.guts import List, Object, String, Float
+from pyrocko.guts import List, Object, String, Float, Bool
 import numpy as num
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
@@ -14,6 +14,8 @@ import logging
 import sys
 import os
 import hashlib
+from functools import partial
+from multiprocessing import Pool
 try:
     import cPickle as pickle
 except ImportError:
@@ -57,8 +59,7 @@ class Hookup():
     def add_to_ned(self, from_location, ned):
         correction = self(from_location)
         correction[-1] -= from_location.depth
-        ned = num.array(ned) + correction
-        return ned
+        return num.array(ned) + correction
 
 
 class Filtrate(Object):
@@ -67,6 +68,7 @@ class Filtrate(Object):
     earthmodel = meta.Earthmodel1D.T()
     phases = List.T(String.T())
     magdiffmax = Float.T(optional=True)
+    includes_segments = Bool.T(default=False)
     #couples = List.T(List.T(DCSource.T(),
     #                         DCSource.T(),
     #                         Target.T(),
@@ -102,6 +104,11 @@ def filename_hash(sources, targets, earthmodel, phases):
     return hashlib.sha1(hstr.encode('utf-8')).hexdigest()
 
 
+def process_source(cmp_e, points_of_segments, hookup):
+    hooked_locations = hookup(cmp_e)
+    return (cmp_e, get_passing_distance(points_of_segments, hooked_locations))
+
+
 class Coupler():
     def __init__(self, filtrate=None):
         self.results = []
@@ -110,12 +117,13 @@ class Coupler():
         self.magdiffmax = 100.
         self.minimum_magnitude = -10
 
-    def process(self, sources, targets, earthmodel, phases, ignore_segments=True,
-                fn_cache=None, check_relevance_by=False):
+    def process(self, sources, targets, earthmodel, phases,
+        incl_segments=False, fn_cache=None, check_relevance_by=False):
 
         self.filtrate = Filtrate(
             sources=sources, targets=targets, phases=phases,
-            earthmodel=earthmodel, magdiffmax=self.magdiffmax)
+            earthmodel=earthmodel, magdiffmax=self.magdiffmax,
+            includes_segments=incl_segments)
 
         i = 0
         self.hookup = Hookup.from_locations(targets)
@@ -124,72 +132,75 @@ class Coupler():
         nsources = len(sources)
         logger.info('start coupling events')
         actors = []
+        pool = Pool()
         for i_e, ev in enumerate(sources):
             #actors.append(vtk_point(self.hookup(ev)))
-            for i_t, t in enumerate(targets):
-                if not self.is_relevant(ev, t, check_relevance_by):
-                    continue
-                arrivals = earthmodel.arrivals([t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth) 
+            targets_want = [t for t in targets if \
+                self.is_relevant(ev, t, check_relevance_by)]
+            get_arrivals = partial(
+                earthmodel.arrivals, phases=phases, zstart=ev.depth)
 
-                if len(arrivals) == 0:
-                    print('no arrival', t, ev.depth, phases)
-                    continue
-                # first arrivals
-                arrival = arrivals[0]
-                incidence_angle = arrival.incidence_angle()
+            distances = [[t.distance_to(ev)*cake.m2d] for t in targets_want]
+            arrivals_all = get_arrivals(distances)
+            # arrivals_all = pool.map(get_arrivals, distances)
+            # arrivals_all = pool.map(get_arrivals, distances)
+                # arrivals = earthmodel.arrivals(
+                #     [t.distance_to(ev)*cake.m2d], phases=phases, zstart=ev.depth) 
+
+            for arrival, t in zip(arrivals_all, targets_want):
                 try:
+                    # arrival = arrivals[0]
                     n, e, d, travel_times = project2enz(arrival, ev.azibazi_to(t)[0])
                 except IndexError as err:
-                    print('!!!Error> ', err)
+                    print('no arrival', t, ev.depth, phases)
                     continue
 
-                n = n * cake.d2m
-                e = e * cake.d2m
-                #if False:
-                    # old version
-                points_of_segments = self.hookup.add_to_ned(ev, (n,e,d))
-
-                #else:
-                #    r = Ray3D.from_RayPath(arrival[0])
-                #    r.set_carthesian_coordinates(*self.hookup(ev))
-                #    #r.set_carthesian_coordinates(n, e, d)
-                #    points_of_segments = num.array(r.orientate3d()[:3])
+                points_of_segments = self.hookup.add_to_ned(
+                    ev, (n*cake.d2m, e*cake.d2m, d))
 
                 #actors.append(vtk_ray(points_of_segments, opacity=0.3))
-                for i_cmp_e, cmp_e in enumerate(sources):
-                    # print('y', ev.name, cmp_e.name)
-                    ned_cmp = self.hookup(cmp_e)
-                    #if abs(ev.magnitude-cmp_e.magnitude)>self.filtrate.magdiffmax:
-                    #    failed += 1
-                    #    continue
 
-                    aout = get_passing_distance(points_of_segments, num.array(ned_cmp))
+                process_source_with_segments = partial(
+                    process_source,
+                    points_of_segments=points_of_segments,
+                    hookup=self.hookup)
+
+                aouts = [process_source_with_segments(s) for s in sources]
+
+                for cmp_e, aout in aouts:
                     if aout:
                         td, pd, total_td, sgmts = aout
                         travel_time_segment = travel_times[0][:sgmts.shape[1]][-1]
-                        # print(travel_time_segment)
-                        # print(aout, travel_time_segment)
-                        # print(travel_time_segment)
+
                         # ray = Ray3DDiscretized(*sgmts, t=travel_times[0][:sgmts.shape[1]])
                         #actors.append(vtk_ray(num.array(ray.nezt[0:3]), opacity=0.3))
-                        passed += 1
-                        self.filtrate.couples.append((
-                            ev, cmp_e, t,
-                            float(td), float(pd), float(total_td),
-                            incidence_angle, travel_time_segment
-                            ))
-                    continue
+                        if not incl_segments:
+                            self.filtrate.couples.append((
+                                ev, cmp_e, t,
+                                float(td), float(pd), float(total_td),
+                                arrival.incidence_angle(), travel_time_segment
+                                ))
+                        else:          
+                            self.filtrate.couples.append((
+                                ev, cmp_e, t,
+                                float(td), float(pd), float(total_td),
+                                arrival.incidence_angle(), travel_time_segment,
+                                sgmts))
 
-            i += 1
-            print('%s / %s' % (i, nsources))
+            print('%s / %s' % (i_e, nsources))
         # VTK
         # render_actors(actors)
         print('failed: %s, passed:%s ' % (failed, passed))
-        if passed == 0:
+        if not len(self.filtrate.couples):
             raise Exception('Coupling failed')
 
         if fn_cache:
             self.filtrate.dump_pickle(filename=fn_cache)
+
+    def arrival_to_ray(self, arrival):
+        r = Ray3D.from_RayPath(arrival)
+        r.set_carthesian_coordinates(*self.hookup(ev))
+        return num.array(r.orientate3d()[:3])
 
     def ray_length(self, arrival):
         z, x, t = arrival.zxt_path_subdivided()
@@ -205,15 +216,16 @@ class Coupler():
 
     def filter_pairs(self, threshold_pass_factor, min_travel_distance, data,
                      ignore=[], max_mag_diff=100, max_magnitude=10.,
-                     min_magnitude=-10.):
+                     min_magnitude=-10., includes_segments=False):
 
         filtered = []
-        has_segments = True
-        #if isinstance(data, Filtrate):
-        #has_segments = False
-
         for r in data:
-            e1, e2, t, traveled_d, passing_d, totald, incidence_angle, travel_time_segment = r
+            if includes_segments:
+                e1, e2, t, traveled_d, passing_d, totald, \
+                incidence_angle, travel_time_segment, sgmts = r
+            else:
+                e1, e2, t, traveled_d, passing_d, totald, \
+                incidence_angle, travel_time_segment = r
             #e1, e2, t, traveled_d, passing_d, segments, totald, incidence_angle = r
 
             if e1.magnitude > max_magnitude or e2.magnitude> max_magnitude:
@@ -239,14 +251,13 @@ class Coupler():
         print('%s of %s pairs passed' %(len(filtered), len(data)))
         return filtered
 
+
 def get_passing_distance(ray_points, x0):
     us = ray_points[:, 1:] - ray_points[:, :-1]
 
     vs = x0 - ray_points[:, :-1]
     ws = x0 - ray_points[:, 1:]
 
-    #vs = x0-x1
-    #ws = x0-x2
     u_norms = num.linalg.norm(us, axis=0)
     ps = num.sum(vs*us, axis=0) / u_norms**2
 
@@ -267,11 +278,7 @@ def get_passing_distance(ray_points, x0):
     segments = num.hstack(
         (ray_points[:, :i_pp+1], (ray_points[:, i_pp+1] -
                                 projected_on_u).reshape(3,1)))
-    #traveled_distance = num.sum(num.linalg.norm(segments.T[1:]-segments.T[:-1], axis=0))
-    #print traveled_distance
-    #r1 = vtk_ray(segments)
-    #r2 = vtk_point(x0)
-    #vtk_render([r1, r2])
+
     return traveled_distance, d_pp, total_traveled_distance, segments
 
 
@@ -349,6 +356,7 @@ class Animator():
         ax.scatter(x, y, z, s=count, alpha=alpha)
         return ax
 
+
 def array_center(stations):
     lats, lons, depths = [], [], []
     for s in stations:
@@ -363,7 +371,6 @@ def array_center(stations):
 def project2enz(arrival, azimuth_deg):
     azimuth = azimuth_deg*cake.d2r
     z, y, t = arrival.zxt_path_subdivided(points_per_straight=400)
-    # z, y, t = arrival.zxt_path_subdivided(points_per_straight=800)
     e = num.sin(azimuth) * y[0]
     n = num.cos(azimuth) * y[0]
     return n, e, z[0], t

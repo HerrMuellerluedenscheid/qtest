@@ -1,5 +1,5 @@
 from pyrocko.guts import Object, String, Float, Dict, Tuple, List, Int, Bool
-from pyrocko import model, util, pile
+from pyrocko import model, util, pile, cake
 import numpy as num
 
 
@@ -102,3 +102,6 @@ class QConfig(Object):
             channel='SHZ')
 
         return c
+
+    def load_velocity_model(self):
+        return cake.load_model(self.earthmodel)

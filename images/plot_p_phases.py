@@ -6,6 +6,8 @@ font = {'family' : 'normal',
 
 matplotlib.rc('font', **font)
 import numpy as num
+import matplotlib
+matplotlib.use('PS')
 import matplotlib.pyplot as plt
 
 from scipy import signal, interpolate
@@ -93,8 +95,8 @@ def cc_batch(trs, hp, lp):
             ydata_b = tr_b.ydata
             tr_b = tr_b.copy()
 
-            tr_b.highpass(4, hp)
-            tr_b.lowpass(4, lp)
+            # tr_b.highpass(4, hp)
+            # tr_b.lowpass(4, lp)
             t, v = trace.correlate(
                 tr_a, tr_b, mode='full', normalization='normal').max()
             ccs.append(v)
@@ -198,8 +200,8 @@ def section_plot(by_markers, section_plot_key, filters, tpad, yscale_factor=0.5,
             event = marker.get_event()
             ax.set_title('%s | %s - %s Hz' % (tr.station, hp, lp))
             tr = tr.copy()
-            tr.highpass(4, hp)
-            tr.lowpass(4, lp)
+            # tr.highpass(4, hp)
+            # tr.lowpass(4, lp)
             # tr.chop(tr.tmin+tpad, tr.tmax-tpad)
             ydata = tr.get_ydata()
             ydata -= num.mean(ydata[0:10])
@@ -249,6 +251,7 @@ if __name__ == '__main__':
     twin_min = -0.01
     twin_max = 0.2
     t_max = {'NKC': 0.2, 'LBC': 0.015}[want_station]   # for cc alignment (maximum time window length)
+    domain = 'spectral'
 
     # cc_min = -0.25   # for cc alignment
     cc_min = -1.   # for cc alignment
@@ -339,10 +342,17 @@ if __name__ == '__main__':
             prepared = []
             for tr in batch:
                 tr = tr.copy()
-                tr.highpass(4, hp)
-                tr.lowpass(4, lp)
-                tr.chop(tr.tmin+tpad, tr.tmax-tpad)
-                prepared.append(tr)
+                if domain == 'spectral':
+                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    a, f = mtspec.mtspec(tr.ydata, delta=tr.deltat, time_bandwidth=4)
+                    xdata = f
+                    ydata = num.log(a)
+                    print('NEEEDS COMPLETION')
+                else:
+                    tr.highpass(4, hp)
+                    tr.lowpass(4, lp)
+                    tr.chop(tr.tmin+tpad, tr.tmax-tpad)
+                    prepared.append(tr)
 
             if batch_filter(test_event):
                 ax.set_title('%s >= %s' % (section_plot_key, section_div))
@@ -405,7 +415,7 @@ if __name__ == '__main__':
     section_plot(by_markers, section_plot_key, filters, tpad=tpad, yscale_factor=yscale_factor,
                  save_file=section_plot_key + '.b.png')
     section_plot(by_markers, section_plot_key, filters, tpad=tpad,
-                 yscale_factor=yscale_factor, overlay=True)
+                 yscale_factor=yscale_factor, overlay=True, outfile=outfn)
 
     plt.show()
 
