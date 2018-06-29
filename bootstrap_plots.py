@@ -49,6 +49,7 @@ else:
     slopes_ratios = {}
 
 want_phase = 'P'
+dump_first_events = 'first_events.pf'
 
 print('Processing phase %s' % want_phase)
 
