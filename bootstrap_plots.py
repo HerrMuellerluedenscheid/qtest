@@ -33,6 +33,7 @@ from qtest.config import QConfig
 pjoin = os.path.join
 
 size_a6 = (1.5*4.13, 1.5*2.91)  # Not really a6
+outfile_types = ['.png', '.pdf']
 
 
 def make_northing_combination_plot(matrices, fn_out=None):
@@ -59,7 +60,8 @@ def make_northing_combination_plot(matrices, fn_out=None):
     ax.spines['right'].set_visible(False)
     fig.colorbar(s, label='1/Q')
     if fn_out is not None:
-        fig.savefig(fn_out, dpi=320)
+        for outfile_type in outfile_types:
+            fig.savefig(fn_out+outfile_type, dpi=320)
 
 
 if __name__ == '__main__':
@@ -354,6 +356,7 @@ if __name__ == '__main__':
         fig.subplots_adjust(#hspace=0.02, wspace=0.02, top=0.95,
                             left=0.15, bottom=0.02, right=0.95)
         fig.savefig('covariances.png', dpi=260)
+        fig.savefig('covariances.pdf')
 
         n_keys = len(polarity_matrices.keys())
         fig_polarity, axs = plt.subplots(n_keys, 1, figsize=(7, 3*n_keys))
@@ -366,6 +369,7 @@ if __name__ == '__main__':
             ax.set_title(key)
         fig.tight_layout()
         fig_polarity.savefig('polarities.png', dpi=260)
+        fig_polarity.savefig('polarities.pdf')
 
         make_northing_combination_plot(
-            matrices, fn_out='northings_vs_q_%s.png' % station)
+            matrices, fn_out='northings_vs_q_%s' % station)
