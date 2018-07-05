@@ -136,7 +136,7 @@ if __name__ == '__main__':
             rmse = num.ndarray(n),
             total_d = num.ndarray(n),
             rsquared = num.ndarray(n),
-            incidence = num.ndarray(n),
+            incidence_angle = num.ndarray(n),
             cc = num.ndarray(n))
 
         q_by_event_involved = defaultdict(list)
@@ -170,7 +170,7 @@ if __name__ == '__main__':
             matrices['qs'][i] = s['q']
             matrices['rmse'][i] = s['rmse']
             matrices['rsquared'][i] = s['rsquared']
-            matrices['incidence'][i] = s['incidence']
+            matrices['incidence_angle'][i] = s['incidence']
             matrices['cc'][i] = s['cc']
 
             q_by_event_involved[s['event1'].name].append(s['q'])
@@ -339,15 +339,18 @@ if __name__ == '__main__':
                 ax.scatter(x, y, s=point_size, color='black', alpha=0.2)
 
                 ax.set_xlim(-200., 200)
-                ax.set_ylabel(k)
-                ax.axvline(0.0, color='black', alpha=0.15)
-                polyfit(ax, x, y)
+                ax.set_ylabel(k.replace('_', ' '))
+                ax.set_xlabel('Q')
+                ax.axvline(0.0, color='black', linestyle='--', alpha=0.8)
+                # polyfit(ax, x, y)
       
                 ax = axs[ikey][1]
                 x = 1./ x
                 ax.scatter(x, y, s=point_size, color='black', alpha=0.2)
-                polyfit(ax, x, y)
-                ax.axvline(0.0, color='black', alpha=0.15)
+                # polyfit(ax, x, y)
+                ax.set_ylabel(k.replace('_', ' '))
+                ax.set_xlabel('1/Q')
+                ax.axvline(0.0, color='black', linestyle='--', alpha=0.8)
                 ax.set_xlim(-0.3, 0.3)
 
         fig.subplots_adjust(#hspace=0.02, wspace=0.02, top=0.95,
