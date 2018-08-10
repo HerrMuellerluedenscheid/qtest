@@ -1,6 +1,10 @@
 #! /usr/bin/env python3
 import matplotlib
 matplotlib.use('Agg')
+font = {'size'   : 17}
+
+matplotlib.rc('font', **font)
+import matplotlib.ticker as ticker
 import matplotlib.pyplot as plt
 # plt.style.use("ggplot")
 
@@ -20,6 +24,20 @@ operator_dict = {
     '==': 'eq',
     '<=': 'le',
 }
+# figsize = (5, 4)
+figsize = None
+
+prop_cycle = plt.rcParams['axes.prop_cycle']
+colors = prop_cycle.by_key()['color']
+# swap first and second element
+print(colors)
+x = colors[0]; colors[0] = colors[1]; colors[1] = x
+colors = dict(
+    LBC='#1f77b4',
+    NKC='#ff7f0e',
+    POC='#2ca02c',
+)
+print(colors)
 
 
 def read_dirs(args):
@@ -85,7 +103,7 @@ def cleanup_axis(ax):
 
 def plothist(slopes, recip=False, ax=None):
     if ax is None:
-        fig = plt.figure(figsize=(6,4))
+        fig = plt.figure(figsize=figsize)
         ax = fig.add_subplot(111)
     if recip:
         slopes = 1./slopes
@@ -134,12 +152,12 @@ if __name__ == '__main__':
     parser.add_argument("--hists",
                         help='Make histogram plots for each result',
                         action='store_true', default=False)
-    parser.add_argument("--xlim", help='set +- xlim', default=False, type=float)
+    parser.add_argument("--xlim", help='set +- xlim', default=0.1, type=float)
     parser.add_argument("--nmin", help='number of minimum datapoints',
                         default=False, type=int)
     parser.add_argument(
         "--outfn", help='default: qs_histogram{.png (will be appended)}',
-        default='qs_histogram.png')
+        default='qs_histogram.v2.pdf')
     parser.add_argument("--acorr", help='autocorrelate distribution',
                         default=False, action='store_true')
     parser.add_argument("--result-filename", help='default: qs_inv.txt',
@@ -166,7 +184,7 @@ if __name__ == '__main__':
     ncol = int(num.sqrt(nsl))
     if args.hists:
         if args.combine:
-            fig_hists = plt.figure()
+            fig_hists = plt.figure(figsize=figsize)
             ax = fig_hists.add_subplot(111)
             axs = [ax] * nsl
 
@@ -177,7 +195,8 @@ if __name__ == '__main__':
             elif ncol != 1:
                 ncol += 1
                 nrow = int(ncol % nsl) + 1
-                fig_hists, ax = plt.subplots(ncol, nrow, sharex=True, sharey=True, figsize=(10, 10))
+                fig_hists, ax = plt.subplots(ncol, nrow, sharex=True,
+                                             sharey=True, figsize=figsize)
                 axs = [ai for aii in ax for ai in aii]
             else:
                 fig_hists = plt.figure()
@@ -185,18 +204,20 @@ if __name__ == '__main__':
 
         axs = iter(axs)
 
-    nbins = 201
+    nbins = 61
     nslopes = len(slopes)
     all_data = []
     filenames = []
+    props = dict(boxstyle='round',
+             alpha=0.9, facecolor='white',
+                 edgecolor='grey')
 
-    for islope, (f, fn_config, sl) in enumerate(slopes):
+    for islope, (f, fn_config, sl) in enumerate(slopes[::-1]):
 
-        label = f.split('/')[0]
+        label = f.split('/')[-2]
         filenames.append(f)
         if args.recip:
             sl = 1./sl
-        # if args.xlim:
         if False:
             idx = num.where(num.abs(sl) < args.xlim)
         else:
@@ -224,20 +245,28 @@ if __name__ == '__main__':
                 d = num.correlate(d, d, mode='full')
                 ax.plot(d, label=label)
             else:
-                ax.hist(d, bins=nbins, label=label, normed=False,
-                        alpha=args.alpha)
-                ax.axvline(median, label=vline_label, color='grey',
-                           alpha=args.alpha)
+                h = ax.hist(d, bins=nbins, label=label, normed=False,
+                        alpha=args.alpha, range=(-args.xlim, args.xlim), lw=0,
+                            color=colors[label])
+                color = h[2][0].get_facecolor()
+                maxy = h[0].max()
+                color = list(color)
+                color[-1] = 1.
+                color = tuple(color)
+                ax.axvline(median, color=color)
+                ax.text(median, maxy, r'$\bar{Q}^{-1}=%1.4f$' % median, color=color,
+                         bbox=props)
                 # ax.text(median, 0., 'median: %1.4f' % median,
                 #         color='grey', size=7)
-                ax.set_xlabel('1/Q' if not args.recip else 'Q')
+                ax.set_xlabel('$Q^{-1}$' if not args.recip else 'Q')
             if args.combine:
-                ax.legend()
+                ax.legend(loc='upper left')
 
             if args.xlim:
                 ax.set_xlim([-args.xlim, args.xlim])
             cleanup_axis(ax)
 
+        ax.set_ylabel('Count')
         qc_dict = {
             'variance' : num.var(d),
             'kurt' : stats.kurtosis(d),
@@ -250,7 +279,7 @@ if __name__ == '__main__':
             for i in qc_dict.items():
                 txt += '%s: %1.4f\n' % i
 
-            ax.text(1., 1., txt, color='grey', size=7, transform=ax.transAxes,
+            ax.text(1., 1., txt, color='grey', alpha=1., size=7, transform=ax.transAxes,
                     verticalalignment='top', horizontalalignment='right')
 
             cleanup_axis(ax)
@@ -262,12 +291,16 @@ if __name__ == '__main__':
         for k, v in conf.__dict__.items():
             if not is_number(v):
                 continue
-            parameters_dict[k]['config_value'].append(v)
+            try:
+                parameters_dict[k]['config_value'].append(v)
+            except KeyError:
+                continue
             for k_qc, v_qc in qc_dict.items():
                 parameters_dict[k][k_qc].append(v_qc)
 
             row_info.append(v)
         all_data.append(row_info)
+        # ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('%0.01f'))
 #
 #    if args.filter_column:
 #        col, expr = args.filter_column.split(':')
@@ -283,6 +316,8 @@ if __name__ == '__main__':
 #            return True
 #
     # print_sorted(num.array(all_data), filenames, args.sort_column, filter=column_filter)
+    fig_hists.subplots_adjust(top=0.93, right=0.93, bottom=0.15, left=0.15)
+
     if args.sort_column:
         print_sorted(num.array(all_data), filenames, args.sort_column) #, filter=column_filter)
 
@@ -313,8 +348,6 @@ if __name__ == '__main__':
             v_qc = k_v_qc[k]
             ax.scatter(k_v_qc['config_value'], v_qc, alpha=0.4)
             cleanup_axis(ax)
-
-    
 
     fig_sigma.savefig(args.outfn + 'x.png')
     plt.show()
